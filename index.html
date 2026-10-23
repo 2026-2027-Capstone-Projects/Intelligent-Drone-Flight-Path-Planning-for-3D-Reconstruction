@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>CesiumJS Drone Acquisition Trajectory Demo</title>
+  <!-- Load CesiumJS from CDN -->
+  <script src="https://cesium.com/downloads/cesiumjs/releases/1.120/Build/Cesium/Cesium.js"></script>
+  <link href="https://cesium.com/downloads/cesiumjs/releases/1.120/Build/Cesium/Widgets/widgets.css" rel="stylesheet" />
+  <style>
+    html, body, #cesiumContainer {
+      width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden;
+      font-family: system-ui, -apple-system, sans-serif;
+    }
+    #controlPanel {
+      position: absolute; top: 12px; left: 12px; z-index: 10;
+      background: rgba(25, 28, 34, 0.92); color: #fff;
+      padding: 16px; border-radius: 8px; width: 300px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      border: 1px solid rgba(255,255,255,0.15);
+    }
+    #controlPanel h3 { margin: 0 0 8px 0; font-size: 16px; color: #38bdf8; }
+    #controlPanel p { margin: 0 0 12px 0; font-size: 12px; color: #cbd5e1; line-height: 1.4; }
+    .btn-group { display: flex; flex-direction: column; gap: 8px; }
+    button {
+      background: #0284c7; color: white; border: none; padding: 8px 12px;
+      border-radius: 5px; cursor: pointer; font-size: 13px; font-weight: 500;
+      transition: background 0.15s; text-align: left;
+    }
+    button:hover { background: #0369a1; }
+    button.secondary { background: #334155; }
+    button.secondary:hover { background: #475569; }
+    .status-bar {
+      margin-top: 12px; padding-top: 10px;
+      border-top: 1px solid rgba(255,255,255,0.15);
+      font-size: 12px; color: #94a3b8;
+    }
+    #waypointInfoBox {
+      position: absolute; top: 12px; right: 12px; z-index: 11;
+      width: min(340px, calc(100vw - 24px)); box-sizing: border-box;
+      max-height: calc(100vh - 24px); overflow: auto;
+      background: rgba(25, 28, 34, 0.96); color: #fff;
+      padding: 16px; border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    }
+    #waypointInfoBox h3 { margin: 0 36px 12px 0; font-size: 16px; color: #38bdf8; }
+    #closeWaypointInfo { position: absolute; top: 8px; right: 8px; }
+    #waypointInfoBox table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    #waypointInfoBox th, #waypointInfoBox td {
+      padding: 8px 4px; border-bottom: 1px solid #475569;
+      text-align: left; vertical-align: top; overflow-wrap: anywhere;
+    }
+    #waypointInfoBox th { color: #cbd5e1; width: 42%; }
+  </style>
+</head>
+<body>
+  <div id="cesiumContainer"></div>
+  <aside id="waypointInfoBox" aria-labelledby="waypointInfoTitle" hidden>
+    <button id="closeWaypointInfo" type="button" aria-label="Close waypoint information">×</button>
+    <h3 id="waypointInfoTitle">Waypoint information</h3>
+    <table><tbody id="waypointInfoRows"></tbody></table>
+    <div class="btn-group" style="margin-top: 12px;">
+      <button type="button" onclick="demoAdjustSelectedAltitude(10)">▲ Raise This Waypoint (+10m)</button>
+      <button type="button" onclick="demoAdjustSelectedAltitude(-10)">▼ Lower This Waypoint (−10m)</button>
+    </div>
+    <p style="font-size: 12px; color: #cbd5e1;">Changes only the selected waypoint. Minimum altitude: 10m.</p>
+  </aside>
+
+  <!-- UI Controls to Demonstrate Acceptance Criteria -->
+  <div id="controlPanel">
+    <h3>Drone Trajectory Controller</h3>
+    <p>Click any 3D waypoint to inspect its coordinates and change its altitude in the InfoBox.</p>
+    <div class="btn-group">
+      <button onclick="demoAdjustAltitude(40)">
+        ▲ Raise Trajectory Altitude (+40m)
+      </button>
+      <button onclick="demoAdjustAltitude(-40)">
+        ▼ Lower Trajectory Altitude (-40m)
+      </button>
+      <button class="secondary" onclick="demoAddWaypoint()">
+        + Append Dynamic Waypoint
+      </button>
+      <button class="secondary" onclick="demoSimulatePlannerOutput()">
+        ⟳ Simulate Path-Planner Update (Spiral)
+      </button>
+      <button class="secondary" onclick="demoReset()">
+        ↺ Reset to Default Survey Grid
+      </button>
+    </div>
+    <div class="status-bar" id="statusText">Waypoints: 6 | Mode: Predefined Grid</div>
+  </div>
+
+  <script>
+    // 1. Initialize Cesium Viewer (Token-free OpenStreetMap setup for instant testing)
+    const viewer = new Cesium.Viewer('cesiumContainer', {
+      baseLayer: new Cesium.ImageryLayer(new Cesium.OpenStreetMapImageryProvider({
+        url: 'https://tile.openstreetmap.org/'
+      })),
+      terrainProvider: new Cesium.EllipsoidTerrainProvider(),
+      baseLayerPicker: false,
+      geocoder: false,
+      timeline: false,
+      animation: false,
+      infoBox: false, // Use an in-page InfoBox that also works when opened as a local file.
+      selectionIndicator: true
+    });
+
+    // Keep the Earth visible even while map tiles are loading.
+    viewer.scene.globe.show = true;
+    viewer.scene.globe.baseColor = Cesium.Color.DARKSLATEGRAY;
+    viewer.scene.globe.depthTestAgainstTerrain = false;
+
+    const waypointInfoBox = document.getElementById('waypointInfoBox');
+    const waypointInfoRows = document.getElementById('waypointInfoRows');
+
+    function showWaypointInfo(entity) {
+      const index = trajectoryManager.waypointEntities.indexOf(entity);
+      const wp = trajectoryManager.waypoints[index];
+      waypointInfoBox.hidden = !wp;
+      waypointInfoRows.replaceChildren();
+      if (!wp) return;
+      document.getElementById('waypointInfoTitle').textContent = `Waypoint ${wp.id}`;
+      const details = [
+        ['Waypoint ID', wp.id],
+        ['Sequence', index + 1],
+        ['Latitude', `${wp.lat.toFixed(6)}°`],
+        ['Longitude', `${wp.lon.toFixed(6)}°`],
+        ['Altitude', `${wp.alt} meters`]
+      ];
+      details.forEach(([label, value]) => {
+        const row = document.createElement('tr');
+        const heading = document.createElement('th');
+        heading.scope = 'row';
+        heading.textContent = label;
+        const cell = document.createElement('td');
+        cell.textContent = String(value);
+        row.append(heading, cell);
+        waypointInfoRows.append(row);
+      });
+    }
+
+    document.getElementById('closeWaypointInfo').addEventListener('click', () => {
+      viewer.selectedEntity = undefined;
+      waypointInfoBox.hidden = true;
+    });
+
+    /**
+     * 2. Reusable DroneTrajectoryManager Class
+     * Accepts a standardized array of waypoint objects: { id, lat, lon, alt }
+     * Drone orientation should be added later
+     */
+    class DroneTrajectoryManager {
+      constructor(cesiumViewer) {
+        this.viewer = cesiumViewer;
+        this.waypoints = [];
+        this.waypointEntities = [];
+        this.dropLineEntities = [];
+        this.trajectoryEntity = null;
+
+        this._initTrajectoryPolyline();
+      }
+
+      // Uses CallbackProperty so the 3D polyline updates automatically when this.waypoints changes
+      _initTrajectoryPolyline() {
+        const dynamicPositions = new Cesium.CallbackProperty(() => {
+          return this.waypoints.map(wp =>
+            Cesium.Cartesian3.fromDegrees(wp.lon, wp.lat, wp.alt)
+          );
+        }, false);
+
+        this.trajectoryEntity = this.viewer.entities.add({
+          name: 'Drone Flight Trajectory',
+          polyline: {
+            positions: dynamicPositions,
+            width: 10,
+            arcType: Cesium.ArcType.NONE, // Straight 3D segments between waypoints
+            material: new Cesium.PolylineArrowMaterialProperty(Cesium.Color.CYAN)
+          }
+        });
+      }
+
+      // Main API method for loading either predefined or algorithm-generated paths
+      loadTrajectory(waypointArray) {
+        this.clearWaypoints();
+        this.waypoints = structuredClone(waypointArray);
+
+        this.waypoints.forEach((wp, index) => {
+          this._createWaypointEntity(wp, index);
+        });
+      }
+
+      // Append a single waypoint
+      addWaypoint(wp) {
+        const index = this.waypoints.length;
+        this.waypoints.push(structuredClone(wp));
+        this._createWaypointEntity(this.waypoints[index], index);
+      }
+
+      // Shift all altitudes
+      offsetAllAltitudes(deltaMeters) {
+        this.waypoints.forEach((wp, idx) => {
+          wp.alt = Math.max(10, wp.alt + deltaMeters);
+          this._updateEntityDescription(this.waypointEntities[idx], wp, idx);
+        });
+      }
+
+      // Adjust one waypoint; existing callbacks update it.
+      offsetWaypointAltitude(index, deltaMeters) {
+        const wp = this.waypoints[index];
+        if (!wp) return false;
+        wp.alt = Math.max(10, wp.alt + deltaMeters);
+        this._updateEntityDescription(this.waypointEntities[index], wp, index);
+        return true;
+      }
+
+      _createWaypointEntity(wp, index) {
+        // Dynamic position callback for the waypoint marker
+        const positionCallback = new Cesium.CallbackProperty(() => {
+          const current = this.waypoints[index];
+          return current
+            ? Cesium.Cartesian3.fromDegrees(current.lon, current.lat, current.alt)
+            : Cesium.Cartesian3.ZERO;
+        }, false);
+
+        // Dynamic label callback showing ID and live waypoint coordinates
+        const labelCallback = new Cesium.CallbackProperty(() => {
+          const current = this.waypoints[index];
+          return current
+            ? `${current.id}\nLat: ${current.lat.toFixed(6)}°, Lon: ${current.lon.toFixed(6)}°\nAlt: ${current.alt}m`
+            : '';
+        }, false);
+
+        // 1. Add the 3D Waypoint Marker
+        const wpEntity = this.viewer.entities.add({
+          name: `Waypoint ${wp.id}`,
+          position: positionCallback,
+          point: {
+            pixelSize: 12,
+            color: index === 0 ? Cesium.Color.LIME : Cesium.Color.ORANGE,
+            outlineColor: Cesium.Color.BLACK,
+            outlineWidth: 2
+          },
+          label: {
+            text: labelCallback,
+            font: '13px sans-serif',
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            outlineWidth: 2,
+            verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+            pixelOffset: new Cesium.Cartesian2(0, -14),
+            disableDepthTestDistance: Number.POSITIVE_INFINITY
+          }
+        });
+
+        this._updateEntityDescription(wpEntity, wp, index);
+        this.waypointEntities.push(wpEntity);
+
+        // 2. Add a vertical drop-line to ground (0m) to visualize altitude in 3D
+        const dropLinePositions = new Cesium.CallbackProperty(() => {
+          const current = this.waypoints[index];
+          if (!current) return [];
+          return [
+            Cesium.Cartesian3.fromDegrees(current.lon, current.lat, 0),
+            Cesium.Cartesian3.fromDegrees(current.lon, current.lat, current.alt)
+          ];
+        }, false);
+
+        const dropLineEntity = this.viewer.entities.add({
+          polyline: {
+            positions: dropLinePositions,
+            width: 2,
+            material: new Cesium.PolylineDashMaterialProperty({
+              color: Cesium.Color.WHITE.withAlpha(0.6),
+              dashLength: 12.0
+            })
+          }
+        });
+
+        this.dropLineEntities.push(dropLineEntity);
+      }
+
+      // Populates Cesium's native InfoBox when a user clicks a waypoint
+      _updateEntityDescription(entity, wp, index) {
+        entity.description = `
+          <table class="cesium-infoBox-defaultTable">
+            <tbody>
+              <tr><th>Waypoint ID</th><td>${wp.id} (Sequence #${index + 1})</td></tr>
+              <tr><th>Latitude</th><td>${wp.lat.toFixed(6)}°</td></tr>
+              <tr><th>Longitude</th><td>${wp.lon.toFixed(6)}°</td></tr>
+              <tr><th>Altitude (AGL/MSL)</th><td><strong>${wp.alt} meters</strong></td></tr>
+            </tbody>
+          </table>
+        `;
+      }
+
+      clearWaypoints() {
+        if (this.waypointEntities.includes(this.viewer.selectedEntity)) {
+          this.viewer.selectedEntity = undefined;
+        }
+        this.waypointEntities.forEach(e => this.viewer.entities.remove(e));
+        this.dropLineEntities.forEach(e => this.viewer.entities.remove(e));
+        this.waypointEntities = [];
+        this.dropLineEntities = [];
+        this.waypoints = [];
+      }
+
+      flyToTrajectory(duration = 1.5) {
+        if (this.waypoints.length > 0) {
+          // Frame the coordinates directly, without waiting for dynamic entities to render.
+          const positions = this.waypoints.map(wp =>
+            Cesium.Cartesian3.fromDegrees(wp.lon, wp.lat, wp.alt)
+          );
+          const bounds = Cesium.BoundingSphere.fromPoints(positions);
+          this.viewer.camera.flyToBoundingSphere(bounds, {
+            offset: new Cesium.HeadingPitchRange(
+              Cesium.Math.toRadians(20),
+              Cesium.Math.toRadians(-35),
+              Math.max(900, bounds.radius * 3)
+            ),
+            duration
+          });
+        }
+      }
+    }
+
+    // 3. Predefined Waypoints
+    const INITIAL_WAYPOINTS = [
+      { id: 'WP-01', lat: 44.5646, lon: -123.2620, alt: 60 },
+      { id: 'WP-02', lat: 44.5665, lon: -123.2620, alt: 100 },
+      { id: 'WP-03', lat: 44.5665, lon: -123.2595, alt: 100 },
+      { id: 'WP-04', lat: 44.5646, lon: -123.2595, alt: 140 },
+      { id: 'WP-05', lat: 44.5646, lon: -123.2570, alt: 140 },
+      { id: 'WP-06', lat: 44.5665, lon: -123.2570, alt: 80 }
+    ];
+
+    // Instantiate manager and load initial trajectory
+    const trajectoryManager = new DroneTrajectoryManager(viewer);
+    trajectoryManager.loadTrajectory(INITIAL_WAYPOINTS);
+    trajectoryManager.flyToTrajectory(0);
+
+    viewer.selectedEntityChanged.addEventListener(showWaypointInfo);
+    // Prefer waypoint markers/labels when a flight path or drop-line overlaps them.
+    viewer.screenSpaceEventHandler.setInputAction((click) => {
+      const pickedWaypoint = viewer.scene.drillPick(click.position).find(pick =>
+        trajectoryManager.waypointEntities.includes(pick.id)
+      );
+      viewer.selectedEntity = pickedWaypoint ? pickedWaypoint.id : undefined;
+    }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+    // 4. UI Controller Functions
+    function updateStatus(modeText) {
+      document.getElementById('statusText').textContent =
+        `Waypoints: ${trajectoryManager.waypoints.length} | Mode: ${modeText}`;
+    }
+
+    function demoAdjustAltitude(delta) {
+      trajectoryManager.offsetAllAltitudes(delta);
+      showWaypointInfo(viewer.selectedEntity);
+      updateStatus(`Altitude Shifted (${delta > 0 ? '+' : ''}${delta}m)`);
+    }
+
+    function demoAdjustSelectedAltitude(delta) {
+      const index = trajectoryManager.waypointEntities.indexOf(viewer.selectedEntity);
+      if (!trajectoryManager.offsetWaypointAltitude(index, delta)) return;
+      showWaypointInfo(viewer.selectedEntity);
+      const wp = trajectoryManager.waypoints[index];
+      updateStatus(`${wp.id} Altitude: ${wp.alt}m`);
+    }
+
+    // Appends a waypoint continuing from last waypoint with random coordinates
+    function demoAddWaypoint() {
+      const lastWp = trajectoryManager.waypoints[trajectoryManager.waypoints.length - 1];
+      const nextNum = trajectoryManager.waypoints.length + 1;
+      const newWp = {
+        id: `WP-0${nextNum}`,
+        lat: lastWp.lat + (Math.random() - 0.3) * 0.0018,
+        lon: lastWp.lon + 0.0015,
+        alt: Math.round(60 + Math.random() * 100)
+      };
+      trajectoryManager.addWaypoint(newWp);
+      updateStatus('Dynamic Waypoint Added');
+    }
+
+    function demoSimulatePlannerOutput() {
+      const centerLat = 44.5655;
+      const centerLon = -123.2595;
+      const plannedPath = [];
+
+      // Generate an 8-point ascending spiral trajectory
+      for (let i = 0; i < 8; i++) {
+        const angle = i * (Math.PI / 3);
+        const radius = 0.0008 + i * 0.00025;
+        plannedPath.push({
+          id: `PLAN-${i + 1}`,
+          lat: centerLat + Math.sin(angle) * radius,
+          lon: centerLon + Math.cos(angle) * radius,
+          alt: 50 + i * 25, // Climbing from 50m to 225m
+        });
+      }
+
+      trajectoryManager.loadTrajectory(plannedPath);
+      updateStatus('Automated Spiral Planner');
+    }
+
+    function demoReset() {
+      trajectoryManager.loadTrajectory(INITIAL_WAYPOINTS);
+      trajectoryManager.flyToTrajectory();
+      updateStatus('Predefined Grid');
+    }
+  </script>
+</body>
+</html>
