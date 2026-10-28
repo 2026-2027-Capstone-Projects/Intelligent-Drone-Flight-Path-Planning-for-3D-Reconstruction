@@ -6,8 +6,10 @@ import { viteStaticCopy } from "vite-plugin-static-copy";
 const cesiumSource = "node_modules/cesium/Build/Cesium";
 // Cesium loads these at runtime relative to CESIUM_BASE_URL.
 const cesiumBaseUrl = "cesium";
+const base = process.env.BASE_PATH ?? "/";
 
 export default defineConfig({
+  base,
   plugins: [
     react(),
     tailwindcss(),
@@ -23,6 +25,6 @@ export default defineConfig({
     chunkSizeWarningLimit: 6000,
   },
   define: {
-    CESIUM_BASE_URL: JSON.stringify(`/${cesiumBaseUrl}`),
+    CESIUM_BASE_URL: JSON.stringify(`${base}${cesiumBaseUrl}`),
   },
 });
