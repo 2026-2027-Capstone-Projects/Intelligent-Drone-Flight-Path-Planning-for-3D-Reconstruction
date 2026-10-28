@@ -35,6 +35,6 @@ jobs:
 
       - name: Install dependencies
         run: bun install
-        
+
       - name: Typecheck & build
         run: bun run build
