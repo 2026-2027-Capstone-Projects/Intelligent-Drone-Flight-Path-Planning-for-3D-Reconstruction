@@ -2,23 +2,39 @@ name: CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
   workflow_dispatch:
 
 permissions:
   contents: read
-  
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Lint & format
+        run: bunx biome ci
+
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      
-      - name: Run a one-line script
-        run: echo Hello, world!
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
 
-      - name: Run script
-        run: |
-          echo Script ran successfully
+      - name: Install dependencies
+        run: bun install
+        
+      - name: Typecheck & build
+        run: bun run build
