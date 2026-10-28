@@ -3,12 +3,12 @@ import {
   Cartographic,
   Cesium3DTileFeature,
   Cesium3DTileStyle,
-  IonResource,
-  ImageryLayer,
   Math as CesiumMath,
+  type Viewer as CesiumViewerInstance,
+  ImageryLayer,
+  IonResource,
   OpenStreetMapImageryProvider,
   Terrain,
-  type Viewer as CesiumViewerInstance,
 } from "cesium";
 import { useCallback, useMemo, useRef, useState } from "react";
 import {
