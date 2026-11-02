@@ -5,23 +5,22 @@ import {
   Cesium3DTileStyle,
   Math as CesiumMath,
   type Viewer as CesiumViewerInstance,
+  Color,
   ImageryLayer,
   IonResource,
   OpenStreetMapImageryProvider,
   Terrain,
-  type Viewer as CesiumViewerInstance,
-  Color,
 } from "cesium";
-import { useCallback, useMemo, useRef, useState, useEffect } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CameraFlyTo,
   Cesium3DTileset,
   type CesiumComponentRef,
   type CesiumMovementEvent,
-  type RootEventTarget,
-  Viewer,
-  useCesium,
   Entity,
+  type RootEventTarget,
+  useCesium,
+  Viewer,
 } from "resium";
 import BuildingInfoPanel, { type SelectedBuilding } from "./BuildingInfoPanel.tsx";
 
@@ -39,11 +38,7 @@ const osmLayer = new ImageryLayer(
 const worldTerrain = Terrain.fromWorldTerrain();
 const osmBuildingsUrl = IonResource.fromAssetId(96188); // Cesium OSM Buildings
 
-function CameraPositionTracker({
-  onChange,
-}: {
-  onChange: (position: CameraPosition) => void;
-}) {
+function CameraPositionTracker({ onChange }: { onChange: (position: CameraPosition) => void }) {
   const { viewer } = useCesium();
 
   useEffect(() => {
@@ -56,10 +51,7 @@ function CameraPositionTracker({
       onChange({
         longitude: CesiumMath.toDegrees(position.longitude),
         latitude: CesiumMath.toDegrees(position.latitude),
-        height: 
-              terrainHeight !== undefined
-              ? position.height - terrainHeight
-              : position.height,
+        height: terrainHeight !== undefined ? position.height - terrainHeight : position.height,
       });
     };
 
@@ -77,11 +69,7 @@ function CameraPositionTracker({
 function CameraOrientationTracker({
   onChange,
 }: {
-  onChange: (orientation: {
-    heading: number;
-    pitch: number;
-    roll: number;
-  }) => void;
+  onChange: (orientation: { heading: number; pitch: number; roll: number }) => void;
 }) {
   const { viewer } = useCesium();
 
@@ -109,10 +97,7 @@ function CameraOrientationTracker({
   return null;
 }
 
-function calculateDroneOrientation(
-  drone: CameraPosition,
-  target: CameraPosition
-) {
+function calculateDroneOrientation(drone: CameraPosition, target: CameraPosition) {
   const dx = target.longitude - drone.longitude;
   const dy = target.latitude - drone.latitude;
   const dz = target.height - drone.height;
@@ -141,10 +126,10 @@ export default function CesiumViewer() {
     pitch: -30,
     roll: 0,
   });
-  
-  const [dronePosition, setDronePosition] = useState<CameraPosition>({
-    longitude: -123.271850,
-    latitude: 44.564370,
+
+  const [dronePosition, _setDronePosition] = useState<CameraPosition>({
+    longitude: -123.27185,
+    latitude: 44.56437,
     height: 100,
   });
 
@@ -160,42 +145,45 @@ export default function CesiumViewer() {
     roll: CesiumMath.toRadians(cameraOrientation.roll),
   };*/
 
-  const handleClick = useCallback((movement: CesiumMovementEvent, target: RootEventTarget) => {
-    if (!(target instanceof Cesium3DTileFeature)) {
-      setSelected(null);
-      return;
-    }
+  const handleClick = useCallback(
+    (movement: CesiumMovementEvent, target: RootEventTarget) => {
+      if (!(target instanceof Cesium3DTileFeature)) {
+        setSelected(null);
+        return;
+      }
 
-    let latitude: number | undefined = target.getProperty("cesium#latitude");
-    let longitude: number | undefined = target.getProperty("cesium#longitude");
-    // OSM Buildings carries a centroid per feature; fall back to the clicked surface point.
-    if (latitude === undefined || longitude === undefined) {
-      const scene = viewerRef.current?.cesiumElement?.scene;
-      const position = movement.position && scene?.pickPosition(movement.position);
-      if (!position) return;
-      const cartographic = Cartographic.fromCartesian(position);
-      latitude = CesiumMath.toDegrees(cartographic.latitude);
-      longitude = CesiumMath.toDegrees(cartographic.longitude);
-    }
+      let latitude: number | undefined = target.getProperty("cesium#latitude");
+      let longitude: number | undefined = target.getProperty("cesium#longitude");
+      // OSM Buildings carries a centroid per feature; fall back to the clicked surface point.
+      if (latitude === undefined || longitude === undefined) {
+        const scene = viewerRef.current?.cesiumElement?.scene;
+        const position = movement.position && scene?.pickPosition(movement.position);
+        if (!position) return;
+        const cartographic = Cartographic.fromCartesian(position);
+        latitude = CesiumMath.toDegrees(cartographic.latitude);
+        longitude = CesiumMath.toDegrees(cartographic.longitude);
+      }
 
-    const building = {
-      elementId: target.getProperty("elementId"),
-      name: target.getProperty("name"),
-      latitude,
-      longitude,
-      height: target.getProperty("cesium#estimatedHeight"),
-    };
+      const building = {
+        elementId: target.getProperty("elementId"),
+        name: target.getProperty("name"),
+        latitude,
+        longitude,
+        height: target.getProperty("cesium#estimatedHeight"),
+      };
 
-    setSelected(building);
-    
-    setDroneOrientation(
-      calculateDroneOrientation(dronePosition, {
-        longitude: building.longitude,
-        latitude: building.latitude,
-        height: building.height ?? 0,
-      })
-    );
-  }, []);
+      setSelected(building);
+
+      setDroneOrientation(
+        calculateDroneOrientation(dronePosition, {
+          longitude: building.longitude,
+          latitude: building.latitude,
+          height: building.height ?? 0,
+        }),
+      );
+    },
+    [dronePosition],
+  );
 
   // Styling by id (rather than setting feature.color) keeps the highlight when tiles reload.
   const selectedId = selected?.elementId;
@@ -238,13 +226,9 @@ export default function CesiumViewer() {
                 Cartesian3.fromDegrees(
                   dronePosition.longitude,
                   dronePosition.latitude,
-                  dronePosition.height
+                  dronePosition.height,
                 ),
-                Cartesian3.fromDegrees(
-                  selected.longitude,
-                  selected.latitude,
-                  50
-                ),
+                Cartesian3.fromDegrees(selected.longitude, selected.latitude, 50),
               ],
               width: 3,
               material: Color.LIME,
@@ -261,7 +245,7 @@ export default function CesiumViewer() {
         />
       </Viewer>
 
-      // The camera position panel on the top right of the Cesium Viewer
+      {/* The camera position panel on the top right of the Cesium Viewer */}
       {cameraPosition && (
         <div
           style={{
