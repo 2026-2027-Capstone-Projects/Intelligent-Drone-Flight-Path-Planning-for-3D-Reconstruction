@@ -5,7 +5,10 @@ import "cesium/Build/Cesium/Widgets/widgets.css";
 import "./index.css";
 import App from "./App.tsx";
 
-createRoot(document.getElementById("root")!).render(
+const root = document.getElementById("root");
+if (!root) throw new Error("Missing #root element in index.html");
+
+createRoot(root).render(
   <StrictMode>
     <App />
   </StrictMode>,
