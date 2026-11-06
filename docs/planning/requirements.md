@@ -1,7 +1,7 @@
 # Functional & System Requirements
 
-**Project:** Intelligent Drone Flight Path Planning for 3D Reconstruction  
-**Term:** Fall 2026 – Repo Checkpoint 1
+- **Project:** Intelligent Drone Flight Path Planning for 3D Reconstruction
+- **Term:** Fall 2026 – Repo Checkpoint 1
 
 ## 1. Overview & Problem Statement
 
