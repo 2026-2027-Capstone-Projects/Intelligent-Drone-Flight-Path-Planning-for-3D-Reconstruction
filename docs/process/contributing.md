@@ -47,7 +47,7 @@ _See CI Gate Implementation Plan Below_
 ## Where Work Lives
 
 - **Code and documentation:** Tracked via pull requests in this repository.
-- **Tasks:** Tracked in the Discord Server and via issues in this repository.
+- **Tasks:** Tracked in the Discord Server and via issues in this repository. See [Creating GitHub Issues and Draft Items](issues.md).
 
 ## What Accepted Means
 

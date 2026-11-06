@@ -85,7 +85,7 @@ Follow these steps to set up and run the development environment from a clean cl
 ├── docs/
 │   ├── architecture/   System design
 │   ├── planning/       Requirements and risks
-│   └── process/        Contributing guide
+│   └── process/        Contributing and issue guides
 └── src/
     ├── components/     Cesium viewer and building info panel
     ├── App.tsx         Root component
@@ -110,3 +110,4 @@ Pull requests to `main` run the CI workflow, which checks linting and formatting
 - [Requirements](docs/planning/requirements.md)
 - [Risks](docs/planning/risks.md)
 - [Contributing guide](docs/process/contributing.md)
+- [Creating GitHub Issues and Draft Items](docs/process/issues.md)
