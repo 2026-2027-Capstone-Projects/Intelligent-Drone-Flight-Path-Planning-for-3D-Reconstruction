@@ -15,6 +15,7 @@ Read `README.md` and the relevant pages in `docs/` for more information about th
 - **`docs/planning/risks.md`:** Risk register and external prerequisites.
 - **`docs/process/contributing.md`:** Setup, definition of done, where work lives, and team norms.
 - **`docs/process/issues.md`:** How to write GitHub Issues and Draft Items, including titles, tasks, and acceptance criteria.
+- **`docs/research/osu-business-resources.md`:** OSU entrepreneurship and commercialization resources, and the capstone IP policy as it applies to this project.
 
 If a page disagrees with the code, treat the code as correct and point out the mismatch.
 
