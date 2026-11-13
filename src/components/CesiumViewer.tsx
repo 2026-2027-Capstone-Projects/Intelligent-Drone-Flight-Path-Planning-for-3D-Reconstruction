@@ -22,6 +22,13 @@ import {
   useCesium,
   Viewer,
 } from "resium";
+import {
+  type BoundingBoxBuffer,
+  boundingBoxAroundBuilding,
+  DEFAULT_BUFFER,
+} from "../boundingBox.ts";
+import BoundingBoxEntity from "./BoundingBoxEntity.tsx";
+import BoundingBoxPanel from "./BoundingBoxPanel.tsx";
 import BuildingInfoPanel, { type SelectedBuilding } from "./BuildingInfoPanel.tsx";
 
 type CameraPosition = {
@@ -118,6 +125,9 @@ function calculateDroneOrientation(drone: CameraPosition, target: CameraPosition
 export default function CesiumViewer() {
   const viewerRef = useRef<CesiumComponentRef<CesiumViewerInstance>>(null);
   const [selected, setSelected] = useState<SelectedBuilding | null>(null);
+  // Space around the selected building that forms the drone's operating box. Kept across
+  // selections so a tuned buffer carries over to the next building.
+  const [buffer, setBuffer] = useState<BoundingBoxBuffer>(DEFAULT_BUFFER);
   // Camera Position
   const [cameraPosition, setCameraPosition] = useState<CameraPosition | null>(null);
   // Camera Orientation
@@ -146,7 +156,19 @@ export default function CesiumViewer() {
   };*/
 
   const handleClick = useCallback(
-    (movement: CesiumMovementEvent, target: RootEventTarget) => {
+    (movement: CesiumMovementEvent, pickedTarget: RootEventTarget) => {
+      const scene = viewerRef.current?.cesiumElement?.scene;
+      // Resium passes only the frontmost pick, which may be the translucent bounding box.
+      // Look underneath it so buildings inside the box stay clickable.
+      const target =
+        pickedTarget instanceof Cesium3DTileFeature
+          ? pickedTarget
+          : movement.position &&
+            scene
+              ?.drillPick(movement.position)
+              .find(
+                (picked): picked is Cesium3DTileFeature => picked instanceof Cesium3DTileFeature,
+              );
       if (!(target instanceof Cesium3DTileFeature)) {
         setSelected(null);
         return;
@@ -156,7 +178,6 @@ export default function CesiumViewer() {
       let longitude: number | undefined = target.getProperty("cesium#longitude");
       // OSM Buildings carries a centroid per feature; fall back to the clicked surface point.
       if (latitude === undefined || longitude === undefined) {
-        const scene = viewerRef.current?.cesiumElement?.scene;
         const position = movement.position && scene?.pickPosition(movement.position);
         if (!position) return;
         const cartographic = Cartographic.fromCartesian(position);
@@ -184,6 +205,14 @@ export default function CesiumViewer() {
     },
     [dronePosition],
   );
+
+  // Operating volume for the drone, generated around the selected building. `box` is null when
+  // nothing is selected or the generated bounds are invalid.
+  const boundingBoxResult = useMemo(
+    () => (selected ? boundingBoxAroundBuilding(selected, buffer) : null),
+    [selected, buffer],
+  );
+  const boundingBox = boundingBoxResult?.box ?? null;
 
   // Styling by id (rather than setting feature.color) keeps the highlight when tiles reload.
   const selectedId = selected?.elementId;
@@ -237,6 +266,7 @@ export default function CesiumViewer() {
         )}
 
         <Cesium3DTileset url={osmBuildingsUrl} style={tilesetStyle} />
+        {boundingBox && <BoundingBoxEntity box={boundingBox} />}
         {/* Oblique view looking north over downtown Corvallis, Oregon */}
         <CameraFlyTo
           destination={Cartesian3.fromDegrees(-123.262, 44.554, 600)}
@@ -281,6 +311,14 @@ export default function CesiumViewer() {
       )}
 
       {selected && <BuildingInfoPanel building={selected} onClose={() => setSelected(null)} />}
+      {selected && (
+        <BoundingBoxPanel
+          buffer={buffer}
+          onBufferChange={setBuffer}
+          box={boundingBox}
+          messages={boundingBoxResult?.messages ?? []}
+        />
+      )}
     </>
   );
 }
