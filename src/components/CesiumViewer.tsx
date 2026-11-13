@@ -5,7 +5,6 @@ import {
   Cesium3DTileStyle,
   Math as CesiumMath,
   type Viewer as CesiumViewerInstance,
-  Color,
   ImageryLayer,
   IonResource,
   OpenStreetMapImageryProvider,
@@ -17,7 +16,6 @@ import {
   Cesium3DTileset,
   type CesiumComponentRef,
   type CesiumMovementEvent,
-  Entity,
   type RootEventTarget,
   useCesium,
   Viewer,
@@ -30,6 +28,7 @@ import {
 import BoundingBoxEntity from "./BoundingBoxEntity.tsx";
 import BoundingBoxPanel from "./BoundingBoxPanel.tsx";
 import BuildingInfoPanel, { type SelectedBuilding } from "./BuildingInfoPanel.tsx";
+import OrbitPlanner from "./OrbitPlanner.tsx";
 
 type CameraPosition = {
   longitude: number;
@@ -104,24 +103,6 @@ function CameraOrientationTracker({
   return null;
 }
 
-function calculateDroneOrientation(drone: CameraPosition, target: CameraPosition) {
-  const dx = target.longitude - drone.longitude;
-  const dy = target.latitude - drone.latitude;
-  const dz = target.height - drone.height;
-
-  const heading = Math.atan2(dx, dy);
-
-  const horizontalDistance = Math.sqrt(dx * dx + dy * dy);
-
-  const pitch = Math.atan2(dz, horizontalDistance);
-
-  return {
-    heading: CesiumMath.toDegrees(heading),
-    pitch: CesiumMath.toDegrees(pitch),
-    roll: 0,
-  };
-}
-
 export default function CesiumViewer() {
   const viewerRef = useRef<CesiumComponentRef<CesiumViewerInstance>>(null);
   const [selected, setSelected] = useState<SelectedBuilding | null>(null);
@@ -136,24 +117,6 @@ export default function CesiumViewer() {
     pitch: -30,
     roll: 0,
   });
-
-  const [dronePosition, _setDronePosition] = useState<CameraPosition>({
-    longitude: -123.27185,
-    latitude: 44.56437,
-    height: 100,
-  });
-
-  const [droneOrientation, setDroneOrientation] = useState({
-    heading: 0,
-    pitch: -45,
-    roll: 0,
-  });
-  /*
-  const orientation = {
-    heading: CesiumMath.toRadians(cameraOrientation.heading),
-    pitch: CesiumMath.toRadians(cameraOrientation.pitch),
-    roll: CesiumMath.toRadians(cameraOrientation.roll),
-  };*/
 
   const handleClick = useCallback(
     (movement: CesiumMovementEvent, pickedTarget: RootEventTarget) => {
@@ -194,16 +157,8 @@ export default function CesiumViewer() {
       };
 
       setSelected(building);
-
-      setDroneOrientation(
-        calculateDroneOrientation(dronePosition, {
-          longitude: building.longitude,
-          latitude: building.latitude,
-          height: building.height ?? 0,
-        }),
-      );
     },
-    [dronePosition],
+    [],
   );
 
   // Operating volume for the drone, generated around the selected building. `box` is null when
@@ -248,22 +203,7 @@ export default function CesiumViewer() {
       >
         <CameraPositionTracker onChange={setCameraPosition} />
         <CameraOrientationTracker onChange={setCameraOrientation} />
-        {selected && (
-          <Entity
-            polyline={{
-              positions: [
-                Cartesian3.fromDegrees(
-                  dronePosition.longitude,
-                  dronePosition.latitude,
-                  dronePosition.height,
-                ),
-                Cartesian3.fromDegrees(selected.longitude, selected.latitude, 50),
-              ],
-              width: 3,
-              material: Color.LIME,
-            }}
-          />
-        )}
+        <OrbitPlanner building={selected} box={boundingBox} />
 
         <Cesium3DTileset url={osmBuildingsUrl} style={tilesetStyle} />
         {boundingBox && <BoundingBoxEntity box={boundingBox} />}
@@ -299,14 +239,6 @@ export default function CesiumViewer() {
           <div>Heading: {cameraOrientation.heading.toFixed(3)}°</div>
           <div>Pitch: {cameraOrientation.pitch.toFixed(3)}°</div>
           <div>Roll: {cameraOrientation.roll.toFixed(3)}°</div>
-          <br />
-          <strong>Drone Camera</strong>
-          <div>Longitude: {dronePosition.longitude.toFixed(6)}°</div>
-          <div>Latitude: {dronePosition.latitude.toFixed(6)}°</div>
-          <div>Height: {dronePosition.height.toFixed(2)} m</div>
-          <div>Heading: {droneOrientation.heading.toFixed(3)}°</div>
-          <div>Pitch: {droneOrientation.pitch.toFixed(3)}°</div>
-          <div>Roll: {droneOrientation.roll.toFixed(3)}°</div>
         </div>
       )}
 

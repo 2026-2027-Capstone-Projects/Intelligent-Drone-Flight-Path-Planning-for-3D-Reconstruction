@@ -1,0 +1,29 @@
+{
+  "browser": "154.0.8037.99",
+  "environment": {
+    "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36 OPR/138.0.0.0 (Edition std-1)",
+    "renderer": "WebKit WebGL"
+  },
+  "records": [
+    {
+      "count": 8,
+      "firstRenderMs": 77.4,
+      "warmRenderMs": [30.7, 31.6, 31.2, 30.9, 31.2],
+      "cameraErrorDegrees": 2.1365421940375983e-14
+    },
+    {
+      "count": 25,
+      "firstRenderMs": 39,
+      "warmRenderMs": [31, 31.9, 31.2, 31.2, 31.5],
+      "cameraErrorDegrees": 3.444887245025236e-14
+    },
+    {
+      "count": 50,
+      "firstRenderMs": 40.5,
+      "warmRenderMs": [31.3, 30.6, 32.3, 32, 30.6],
+      "cameraErrorDegrees": 4.8289538041137345e-14
+    }
+  ],
+  "errors": [],
+  "alive": true
+}
