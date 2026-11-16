@@ -23,6 +23,8 @@ import {
   Viewer,
 } from "resium";
 import BuildingInfoPanel, { type SelectedBuilding } from "./BuildingInfoPanel.tsx";
+import BuildingSearch from "./BuildingSearch.tsx";
+import type { NominatimResult } from "../services/nominatim_API";
 
 type CameraPosition = {
   longitude: number;
@@ -185,6 +187,24 @@ export default function CesiumViewer() {
     [dronePosition],
   );
 
+  const handleSearchSelect = useCallback((result: NominatimResult) => {
+    const viewer = viewerRef.current?.cesiumElement;
+
+    if (!viewer) return;
+
+    const longitude = Number(result.lon);
+    const latitude = Number(result.lat);
+
+    if (!Number.isFinite(longitude) || !Number.isFinite(latitude)) {
+      return;
+    }
+
+    viewer.camera.flyTo({
+      destination: Cartesian3.fromDegrees(longitude, latitude, 500),
+      duration: 2,
+    });
+  }, []);
+
   // Styling by id (rather than setting feature.color) keeps the highlight when tiles reload.
   const selectedId = selected?.elementId;
   const tilesetStyle = useMemo(
@@ -244,6 +264,8 @@ export default function CesiumViewer() {
           once
         />
       </Viewer>
+
+      <BuildingSearch onSelectBuilding={handleSearchSelect} />
 
       {/* The camera position panel on the top right of the Cesium Viewer */}
       {cameraPosition && (
