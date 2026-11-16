@@ -13,7 +13,7 @@ type Props = {
 
 export default function BuildingInfoPanel({ building, onClose }: Props) {
   return (
-    <div className="absolute top-4 left-4 z-10 w-64 rounded-lg bg-white/90 p-4 text-sm text-gray-900 shadow-lg">
+    <div className="absolute bottom-4 left-4 z-10 w-64 rounded-lg bg-white/90 p-4 text-sm text-gray-900 shadow-lg">
       <div className="mb-2 flex items-start justify-between gap-2">
         <h2 className="font-semibold">{building.name ?? "Unnamed building"}</h2>
         <button
