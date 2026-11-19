@@ -5,7 +5,6 @@ import {
   Cesium3DTileStyle,
   Math as CesiumMath,
   type Viewer as CesiumViewerInstance,
-  Color,
   ImageryLayer,
   IonResource,
   OpenStreetMapImageryProvider,
@@ -17,7 +16,6 @@ import {
   Cesium3DTileset,
   type CesiumComponentRef,
   type CesiumMovementEvent,
-  Entity,
   type RootEventTarget,
   useCesium,
   Viewer,
@@ -27,9 +25,16 @@ import {
   boundingBoxAroundBuilding,
   DEFAULT_BUFFER,
 } from "../boundingBox.ts";
+import {
+  type FlightPatternType,
+  generateFlightPath,
+  type Waypoint,
+} from "../flightPath.ts";
 import BoundingBoxEntity from "./BoundingBoxEntity.tsx";
 import BoundingBoxPanel from "./BoundingBoxPanel.tsx";
 import BuildingInfoPanel, { type SelectedBuilding } from "./BuildingInfoPanel.tsx";
+import DroneFlightLayer from "./DroneFlightLayer.tsx";
+import FlightPathPanel from "./FlightPathPanel.tsx";
 
 type CameraPosition = {
   longitude: number;
@@ -37,39 +42,29 @@ type CameraPosition = {
   height: number;
 };
 
-// Created once so Resium doesn't see new instances on every render.
 const osmLayer = new ImageryLayer(
   new OpenStreetMapImageryProvider({ url: "https://tile.openstreetmap.org/" }),
 );
-// Buildings are placed at real ground elevation, so they need terrain to sit on.
 const worldTerrain = Terrain.fromWorldTerrain();
-const osmBuildingsUrl = IonResource.fromAssetId(96188); // Cesium OSM Buildings
+const osmBuildingsUrl = IonResource.fromAssetId(96188);
 
 function CameraPositionTracker({ onChange }: { onChange: (position: CameraPosition) => void }) {
   const { viewer } = useCesium();
-
   useEffect(() => {
     if (!viewer) return;
-
     const updatePosition = () => {
       const position = viewer.camera.positionCartographic;
       const terrainHeight = viewer.scene.globe.getHeight(position);
-
       onChange({
         longitude: CesiumMath.toDegrees(position.longitude),
         latitude: CesiumMath.toDegrees(position.latitude),
         height: terrainHeight !== undefined ? position.height - terrainHeight : position.height,
       });
     };
-
     viewer.camera.changed.addEventListener(updatePosition);
     updatePosition();
-
-    return () => {
-      viewer.camera.changed.removeEventListener(updatePosition);
-    };
+    return () => viewer.camera.changed.removeEventListener(updatePosition);
   }, [viewer, onChange]);
-
   return null;
 }
 
@@ -79,65 +74,42 @@ function CameraOrientationTracker({
   onChange: (orientation: { heading: number; pitch: number; roll: number }) => void;
 }) {
   const { viewer } = useCesium();
-
   useEffect(() => {
     if (!viewer) return;
-
     const updateOrientation = () => {
       const camera = viewer.camera;
-
       onChange({
         heading: CesiumMath.toDegrees(camera.heading),
         pitch: CesiumMath.toDegrees(camera.pitch),
         roll: CesiumMath.toDegrees(camera.roll),
       });
     };
-
     viewer.camera.changed.addEventListener(updateOrientation);
     updateOrientation();
-
-    return () => {
-      viewer.camera.changed.removeEventListener(updateOrientation);
-    };
+    return () => viewer.camera.changed.removeEventListener(updateOrientation);
   }, [viewer, onChange]);
-
   return null;
-}
-
-function calculateDroneOrientation(drone: CameraPosition, target: CameraPosition) {
-  const dx = target.longitude - drone.longitude;
-  const dy = target.latitude - drone.latitude;
-  const dz = target.height - drone.height;
-
-  const heading = Math.atan2(dx, dy);
-
-  const horizontalDistance = Math.sqrt(dx * dx + dy * dy);
-
-  const pitch = Math.atan2(dz, horizontalDistance);
-
-  return {
-    heading: CesiumMath.toDegrees(heading),
-    pitch: CesiumMath.toDegrees(pitch),
-    roll: 0,
-  };
 }
 
 export default function CesiumViewer() {
   const viewerRef = useRef<CesiumComponentRef<CesiumViewerInstance>>(null);
   const [selected, setSelected] = useState<SelectedBuilding | null>(null);
-  // Space around the selected building that forms the drone's operating box. Kept across
-  // selections so a tuned buffer carries over to the next building.
   const [buffer, setBuffer] = useState<BoundingBoxBuffer>(DEFAULT_BUFFER);
-  // Camera Position
+
   const [cameraPosition, setCameraPosition] = useState<CameraPosition | null>(null);
-  // Camera Orientation
   const [cameraOrientation, setCameraOrientation] = useState({
     heading: 0,
     pitch: -30,
     roll: 0,
   });
 
-  const [dronePosition, _setDronePosition] = useState<CameraPosition>({
+  const [pattern, setPattern] = useState<FlightPatternType>("helix");
+  const [turns, setTurns] = useState<number>(3);
+  const [isPlaying, setIsPlaying] = useState<boolean>(true);
+  const [speedMps, setSpeedMps] = useState<number>(8);
+  const [progress, setProgress] = useState<number>(0);
+
+  const [dronePosition, setDronePosition] = useState<CameraPosition>({
     longitude: -123.27185,
     latitude: 44.56437,
     height: 100,
@@ -148,18 +120,10 @@ export default function CesiumViewer() {
     pitch: -45,
     roll: 0,
   });
-  /*
-  const orientation = {
-    heading: CesiumMath.toRadians(cameraOrientation.heading),
-    pitch: CesiumMath.toRadians(cameraOrientation.pitch),
-    roll: CesiumMath.toRadians(cameraOrientation.roll),
-  };*/
 
   const handleClick = useCallback(
     (movement: CesiumMovementEvent, pickedTarget: RootEventTarget) => {
       const scene = viewerRef.current?.cesiumElement?.scene;
-      // Resium passes only the frontmost pick, which may be the translucent bounding box.
-      // Look underneath it so buildings inside the box stay clickable.
       const target =
         pickedTarget instanceof Cesium3DTileFeature
           ? pickedTarget
@@ -176,7 +140,6 @@ export default function CesiumViewer() {
 
       let latitude: number | undefined = target.getProperty("cesium#latitude");
       let longitude: number | undefined = target.getProperty("cesium#longitude");
-      // OSM Buildings carries a centroid per feature; fall back to the clicked surface point.
       if (latitude === undefined || longitude === undefined) {
         const position = movement.position && scene?.pickPosition(movement.position);
         if (!position) return;
@@ -185,36 +148,42 @@ export default function CesiumViewer() {
         longitude = CesiumMath.toDegrees(cartographic.longitude);
       }
 
-      const building = {
+      setSelected({
         elementId: target.getProperty("elementId"),
         name: target.getProperty("name"),
         latitude,
         longitude,
         height: target.getProperty("cesium#estimatedHeight"),
-      };
-
-      setSelected(building);
-
-      setDroneOrientation(
-        calculateDroneOrientation(dronePosition, {
-          longitude: building.longitude,
-          latitude: building.latitude,
-          height: building.height ?? 0,
-        }),
-      );
+      });
+      setProgress(0);
     },
-    [dronePosition],
+    [],
   );
 
-  // Operating volume for the drone, generated around the selected building. `box` is null when
-  // nothing is selected or the generated bounds are invalid.
   const boundingBoxResult = useMemo(
     () => (selected ? boundingBoxAroundBuilding(selected, buffer) : null),
     [selected, buffer],
   );
   const boundingBox = boundingBoxResult?.box ?? null;
 
-  // Styling by id (rather than setting feature.color) keeps the highlight when tiles reload.
+  const waypoints = useMemo(() => {
+    if (!selected || !boundingBox) return [];
+    return generateFlightPath(pattern, selected, boundingBox, { turns });
+  }, [selected, boundingBox, pattern, turns]);
+
+  const handleDroneTelemetry = useCallback((wp: Waypoint) => {
+    setDronePosition({
+      longitude: wp.longitude,
+      latitude: wp.latitude,
+      height: wp.altitude,
+    });
+    setDroneOrientation({
+      heading: wp.heading,
+      pitch: wp.pitch,
+      roll: 0,
+    });
+  }, []);
+
   const selectedId = selected?.elementId;
   const tilesetStyle = useMemo(
     () =>
@@ -239,35 +208,31 @@ export default function CesiumViewer() {
         baseLayer={osmLayer}
         terrain={worldTerrain}
         baseLayerPicker={false}
-        geocoder={false} // requires ion
+        geocoder={false}
         timeline={false}
         animation={false}
-        infoBox={false} // replaced by BuildingInfoPanel
+        infoBox={false}
         selectionIndicator={false}
         onClick={handleClick}
       >
         <CameraPositionTracker onChange={setCameraPosition} />
         <CameraOrientationTracker onChange={setCameraOrientation} />
-        {selected && (
-          <Entity
-            polyline={{
-              positions: [
-                Cartesian3.fromDegrees(
-                  dronePosition.longitude,
-                  dronePosition.latitude,
-                  dronePosition.height,
-                ),
-                Cartesian3.fromDegrees(selected.longitude, selected.latitude, 50),
-              ],
-              width: 3,
-              material: Color.LIME,
-            }}
-          />
-        )}
 
         <Cesium3DTileset url={osmBuildingsUrl} style={tilesetStyle} />
         {boundingBox && <BoundingBoxEntity box={boundingBox} />}
-        {/* Oblique view looking north over downtown Corvallis, Oregon */}
+
+        {selected && waypoints.length > 0 && (
+          <DroneFlightLayer
+            waypoints={waypoints}
+            targetBuilding={selected}
+            isPlaying={isPlaying}
+            speedMps={speedMps}
+            progress={progress}
+            onProgressChange={setProgress}
+            onDroneTelemetry={handleDroneTelemetry}
+          />
+        )}
+
         <CameraFlyTo
           destination={Cartesian3.fromDegrees(-123.262, 44.554, 600)}
           orientation={{ heading: 0, pitch: CesiumMath.toRadians(-30), roll: 0 }}
@@ -275,7 +240,6 @@ export default function CesiumViewer() {
         />
       </Viewer>
 
-      {/* The camera position panel on the top right of the Cesium Viewer */}
       {cameraPosition && (
         <div
           style={{
@@ -294,16 +258,16 @@ export default function CesiumViewer() {
           <div>Longitude: {cameraPosition.longitude.toFixed(6)}°</div>
           <div>Latitude: {cameraPosition.latitude.toFixed(6)}°</div>
           <div>Height: {cameraPosition.height.toFixed(2)} m</div>
-          <br></br>
+          <br />
           <strong>Camera Orientation</strong>
           <div>Heading: {cameraOrientation.heading.toFixed(3)}°</div>
           <div>Pitch: {cameraOrientation.pitch.toFixed(3)}°</div>
           <div>Roll: {cameraOrientation.roll.toFixed(3)}°</div>
           <br />
-          <strong>Drone Camera</strong>
+          <strong>Drone Telemetry</strong>
           <div>Longitude: {dronePosition.longitude.toFixed(6)}°</div>
           <div>Latitude: {dronePosition.latitude.toFixed(6)}°</div>
-          <div>Height: {dronePosition.height.toFixed(2)} m</div>
+          <div>Height (AGL): {dronePosition.height.toFixed(2)} m</div>
           <div>Heading: {droneOrientation.heading.toFixed(3)}°</div>
           <div>Pitch: {droneOrientation.pitch.toFixed(3)}°</div>
           <div>Roll: {droneOrientation.roll.toFixed(3)}°</div>
@@ -311,12 +275,34 @@ export default function CesiumViewer() {
       )}
 
       {selected && <BuildingInfoPanel building={selected} onClose={() => setSelected(null)} />}
+
+      {/* Bottom-Left Corner: Operating Volume Panel */}
       {selected && (
         <BoundingBoxPanel
           buffer={buffer}
           onBufferChange={setBuffer}
           box={boundingBox}
           messages={boundingBoxResult?.messages ?? []}
+        />
+      )}
+
+      {/* Bottom-Right Corner: Flight Mission Panel */}
+      {selected && (
+        <FlightPathPanel
+          pattern={pattern}
+          onPatternChange={(next) => {
+            setPattern(next);
+            setProgress(0);
+          }}
+          turns={turns}
+          onTurnsChange={setTurns}
+          isPlaying={isPlaying}
+          onTogglePlay={() => setIsPlaying((p) => !p)}
+          speedMps={speedMps}
+          onSpeedChange={setSpeedMps}
+          progress={progress}
+          onProgressChange={setProgress}
+          waypoints={waypoints}
         />
       )}
     </>

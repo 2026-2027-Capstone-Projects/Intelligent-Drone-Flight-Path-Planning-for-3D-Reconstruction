@@ -1,36 +1,37 @@
-import { Color, HeightReference } from "cesium";
-import { useMemo } from "react";
-import { Entity } from "resium";
+import { useEffect, useState } from "react";
+import { Entity, useCesium } from "resium";
+import { Cartographic, Color } from "cesium";
 import { type BoundingBox, toRectangle } from "../boundingBox.ts";
 
-const fillColor = Color.CYAN.withAlpha(0.2);
-const outlineColor = Color.CYAN;
-
-/**
- * Draws the operating bounding box as a translucent volume on the globe.
- *
- * Only pass a box that has passed `validateBoundingBox`. Out-of-range bounds can break Cesium's
- * rendering.
- *
- * Both heights are RELATIVE_TO_GROUND to match the box's AGL altitudes. Cesium offsets a
- * RELATIVE_TO_GROUND rectangle by the terrain height at its center, so over sloped terrain the
- * drawn box is approximate. The containment check in `boundingBox.ts` is exact.
- */
 export default function BoundingBoxEntity({ box }: { box: BoundingBox }) {
-  const coordinates = useMemo(() => toRectangle(box), [box]);
+  const { viewer } = useCesium();
+  const [terrainHeight, setTerrainHeight] = useState<number>(0);
+
+  useEffect(() => {
+    if (!viewer) return;
+    const centerLat = (box.south + box.north) / 2;
+    const centerLon = (box.west + box.east) / 2;
+
+    const cartographic = Cartographic.fromDegrees(centerLon, centerLat);
+    const height = viewer.scene.globe.getHeight(cartographic);
+    setTerrainHeight(height !== undefined ? height : 0);
+  }, [viewer, box]);
+
+  const rectangle = toRectangle(box);
+  const baseHeight = terrainHeight + box.minAltitude;
+  const topHeight = terrainHeight + box.maxAltitude;
 
   return (
     <Entity
-      name="Operating bounding box"
+      name="Operating Bounding Box"
       rectangle={{
-        coordinates,
-        height: box.minAltitude,
-        extrudedHeight: box.maxAltitude,
-        heightReference: HeightReference.RELATIVE_TO_GROUND,
-        extrudedHeightReference: HeightReference.RELATIVE_TO_GROUND,
-        material: fillColor,
+        coordinates: rectangle,
+        height: baseHeight,
+        extrudedHeight: topHeight,
+        material: Color.YELLOW.withAlpha(0.25),
         outline: true,
-        outlineColor,
+        outlineColor: Color.YELLOW,
+        outlineWidth: 2,
       }}
     />
   );

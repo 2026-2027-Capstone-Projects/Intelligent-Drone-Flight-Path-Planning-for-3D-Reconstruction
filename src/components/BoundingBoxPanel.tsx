@@ -10,16 +10,12 @@ import {
 
 type Props = {
   buffer: BoundingBoxBuffer;
-  // Only called with a buffer that passed `validateBuffer`.
   onBufferChange: (buffer: BoundingBoxBuffer) => void;
   box: BoundingBox | null;
-  // Notes or errors from generating the box (e.g. the altitude cap was applied).
   messages: string[];
 };
 
 type BufferKey = keyof BoundingBoxBuffer;
-
-// Input values are kept as strings so partial entries like "" or "1." aren't overwritten while typing.
 type Draft = Record<BufferKey, string>;
 
 const rows: { key: BufferKey; label: string }[] = [
@@ -27,7 +23,6 @@ const rows: { key: BufferKey; label: string }[] = [
   { key: "vertical", label: "Vertical buffer (m)" },
 ];
 
-// An empty field becomes NaN, which validation reports as "must be a number".
 const parse = (value: string) => (value.trim() === "" ? Number.NaN : Number(value));
 
 export default function BoundingBoxPanel({ buffer, onBufferChange, box, messages }: Props) {
@@ -37,8 +32,6 @@ export default function BoundingBoxPanel({ buffer, onBufferChange, box, messages
   }));
   const [errors, setErrors] = useState<string[]>([]);
 
-  // Sync the inputs when the buffer changes from the −/+ buttons, but leave a field alone while
-  // its text already parses to the current value (so typing "1." isn't reset to "1").
   useEffect(() => {
     setDraft((prev) => ({
       horizontal:
@@ -57,11 +50,7 @@ export default function BoundingBoxPanel({ buffer, onBufferChange, box, messages
     };
     const nextErrors = validateBuffer(candidate);
     setErrors(nextErrors);
-    if (nextErrors.length > 0) {
-      // Keep the last valid box on the globe until the input is fixed.
-      console.warn("Invalid bounding box buffer; keeping the previous box.", nextErrors);
-      return;
-    }
+    if (nextErrors.length > 0) return;
     onBufferChange(candidate);
   };
 
@@ -69,7 +58,6 @@ export default function BoundingBoxPanel({ buffer, onBufferChange, box, messages
     const max = key === "horizontal" ? MAX_HORIZONTAL_BUFFER_M : Number.POSITIVE_INFINITY;
     const value = Math.min(max, Math.max(0, buffer[key] + direction * BUFFER_STEP_M));
     const next = { ...buffer, [key]: value };
-    // Overwrite both fields so a half-typed invalid value doesn't linger next to the new box.
     setDraft({ horizontal: String(next.horizontal), vertical: String(next.vertical) });
     setErrors([]);
     onBufferChange(next);
@@ -78,13 +66,13 @@ export default function BoundingBoxPanel({ buffer, onBufferChange, box, messages
   const size = ESTIMATED_FOOTPRINT_M + 2 * buffer.horizontal;
 
   return (
-    <div className="absolute bottom-10 left-4 z-10 w-72 rounded-lg bg-white/90 p-4 text-sm text-gray-900 shadow-lg">
-      <h2 className="mb-2 font-semibold">Operating bounding box</h2>
+    <div className="absolute bottom-10 left-4 z-10 w-72 rounded-lg bg-white/95 p-4 text-sm text-gray-900 shadow-lg backdrop-blur-sm">
+      <h2 className="mb-2 font-semibold">Drone Operating Volume</h2>
 
       <div className="space-y-2">
         {rows.map(({ key, label }) => (
           <div key={key} className="flex flex-col gap-0.5">
-            <label htmlFor={`buffer-${key}`} className="text-gray-500">
+            <label htmlFor={`buffer-${key}`} className="text-xs text-gray-500">
               {label}
             </label>
             <div className="flex gap-1">
@@ -92,7 +80,7 @@ export default function BoundingBoxPanel({ buffer, onBufferChange, box, messages
                 type="button"
                 onClick={() => step(key, -1)}
                 className="w-8 rounded border border-gray-300 hover:bg-gray-100"
-                aria-label={`Decrease ${label} by ${BUFFER_STEP_M} m`}
+                aria-label={`Decrease ${label}`}
               >
                 −
               </button>
@@ -109,7 +97,7 @@ export default function BoundingBoxPanel({ buffer, onBufferChange, box, messages
                 type="button"
                 onClick={() => step(key, 1)}
                 className="w-8 rounded border border-gray-300 hover:bg-gray-100"
-                aria-label={`Increase ${label} by ${BUFFER_STEP_M} m`}
+                aria-label={`Increase ${label}`}
               >
                 +
               </button>
@@ -119,25 +107,21 @@ export default function BoundingBoxPanel({ buffer, onBufferChange, box, messages
       </div>
 
       {box && (
-        <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
+        <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
           <dt className="text-gray-500">Size</dt>
           <dd>
             {size.toFixed(0)} × {size.toFixed(0)} × {box.maxAltitude.toFixed(0)} m
           </dd>
-          <dt className="text-gray-500">West</dt>
-          <dd>{box.west.toFixed(6)}°</dd>
-          <dt className="text-gray-500">East</dt>
-          <dd>{box.east.toFixed(6)}°</dd>
-          <dt className="text-gray-500">South</dt>
-          <dd>{box.south.toFixed(6)}°</dd>
-          <dt className="text-gray-500">North</dt>
-          <dd>{box.north.toFixed(6)}°</dd>
+          <dt className="text-gray-500">Bounds</dt>
+          <dd>
+            {box.west.toFixed(4)}°, {box.south.toFixed(4)}° to {box.east.toFixed(4)}°, {box.north.toFixed(4)}°
+          </dd>
         </dl>
       )}
 
       <div role="status" aria-live="polite">
         {(errors.length > 0 || messages.length > 0) && (
-          <ul className="mt-2 list-none space-y-0.5">
+          <ul className="mt-2 list-none space-y-0.5 text-xs">
             {errors.map((message) => (
               <li key={`error-${message}`} className="text-red-700">
                 {message}
