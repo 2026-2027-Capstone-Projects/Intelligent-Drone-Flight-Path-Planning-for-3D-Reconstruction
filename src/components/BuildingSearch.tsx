@@ -1,8 +1,8 @@
 
 import { useState } from "react";
 import {
-  searchBuildings,
   type NominatimResult,
+  searchBuildings,
 } from "../services/nominatim_API";
 
 type BuildingSearchProps = {
@@ -79,6 +79,7 @@ export default function BuildingSearch({
         <div className="mt-3 max-h-64 space-y-2 overflow-y-auto">
           {results.map((result) => (
             <button
+              type="button"
               key={`${result.osm_type}-${result.osm_id}`}
               onClick={() => onSelectBuilding(result)}
               className="block w-full rounded border border-gray-200 p-2 text-left hover:bg-gray-100"
