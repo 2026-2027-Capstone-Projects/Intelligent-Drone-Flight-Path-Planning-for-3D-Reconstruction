@@ -1,17 +1,11 @@
-
 import { useState } from "react";
-import {
-  type NominatimResult,
-  searchBuildings,
-} from "../services/nominatim_API";
+import { type NominatimResult, searchBuildings } from "../services/nominatim_API";
 
 type BuildingSearchProps = {
   onSelectBuilding: (building: NominatimResult) => void;
 };
 
-export default function BuildingSearch({
-  onSelectBuilding,
-}: BuildingSearchProps) {
+export default function BuildingSearch({ onSelectBuilding }: BuildingSearchProps) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<NominatimResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -37,9 +31,7 @@ export default function BuildingSearch({
 
   return (
     <div className="absolute top-4 left-4 z-50 w-80 rounded-lg bg-white p-4 shadow-lg">
-      <h2 className="mb-3 text-lg font-semibold text-gray-900">
-        Building Search
-      </h2>
+      <h2 className="mb-3 text-lg font-semibold text-gray-900">Building Search</h2>
 
       <form
         onSubmit={(event) => {
@@ -65,14 +57,10 @@ export default function BuildingSearch({
         </button>
       </form>
 
-      {error && (
-        <p className="mt-3 text-sm text-red-600">{error}</p>
-      )}
+      {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
 
       {!loading && results.length === 0 && !error && (
-        <p className="mt-3 text-sm text-gray-500">
-          Search for a building to see results.
-        </p>
+        <p className="mt-3 text-sm text-gray-500">Search for a building to see results.</p>
       )}
 
       {results.length > 0 && (
@@ -88,9 +76,7 @@ export default function BuildingSearch({
                 {result.name || result.display_name}
               </p>
 
-              <p className="mt-1 text-xs text-gray-500">
-                {result.display_name}
-              </p>
+              <p className="mt-1 text-xs text-gray-500">{result.display_name}</p>
             </button>
           ))}
         </div>

@@ -15,12 +15,9 @@ export type NominatimResult = {
   class: string;
 };
 
-const NOMINATIM_URL =
-  "https://nominatim.openstreetmap.org/search";
+const NOMINATIM_URL = "https://nominatim.openstreetmap.org/search";
 
-export async function searchBuildings(
-  query: string
-): Promise<NominatimResult[]> {
+export async function searchBuildings(query: string): Promise<NominatimResult[]> {
   if (!query.trim()) {
     return [];
   }
@@ -42,13 +39,10 @@ export async function searchBuildings(
   const response = await fetch(url.toString());
 
   if (!response.ok) {
-    throw new Error(
-      `Nominatim request failed: ${response.status}`
-    );
+    throw new Error(`Nominatim request failed: ${response.status}`);
   }
 
-  const results: NominatimResult[] =
-    await response.json();
+  const results: NominatimResult[] = await response.json();
 
   return results;
 }

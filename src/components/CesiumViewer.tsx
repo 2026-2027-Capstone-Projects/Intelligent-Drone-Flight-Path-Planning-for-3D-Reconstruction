@@ -22,9 +22,9 @@ import {
   useCesium,
   Viewer,
 } from "resium";
+import type { NominatimResult } from "../services/nominatim_API";
 import BuildingInfoPanel, { type SelectedBuilding } from "./BuildingInfoPanel.tsx";
 import BuildingSearch from "./BuildingSearch.tsx";
-import type { NominatimResult } from "../services/nominatim_API";
 
 type CameraPosition = {
   longitude: number;
