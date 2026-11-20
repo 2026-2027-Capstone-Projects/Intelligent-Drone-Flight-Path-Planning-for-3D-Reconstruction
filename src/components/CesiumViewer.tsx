@@ -91,6 +91,37 @@ function CameraOrientationTracker({
   return null;
 }
 
+function DroneCameraTracker({
+  position,
+  orientation,
+  active,
+}: {
+  position: { longitude: number; latitude: number; height: number };
+  orientation: { heading: number; pitch: number; roll: number };
+  active: boolean;
+}) {
+  const { viewer } = useCesium();
+
+  useEffect(() => {
+    if (!viewer || !active) return;
+    const cartesianPos = Cartesian3.fromDegrees(
+      position.longitude,
+      position.latitude,
+      position.height,
+    );
+    viewer.camera.setView({
+      destination: cartesianPos,
+      orientation: {
+        heading: CesiumMath.toRadians(orientation.heading),
+        pitch: CesiumMath.toRadians(orientation.pitch),
+        roll: CesiumMath.toRadians(orientation.roll),
+      },
+    });
+  }, [viewer, position, orientation, active]);
+
+  return null;
+}
+
 export default function CesiumViewer() {
   const viewerRef = useRef<CesiumComponentRef<CesiumViewerInstance>>(null);
   const [selected, setSelected] = useState<SelectedBuilding | null>(null);
@@ -108,6 +139,7 @@ export default function CesiumViewer() {
   const [isPlaying, setIsPlaying] = useState<boolean>(true);
   const [speedMps, setSpeedMps] = useState<number>(8);
   const [progress, setProgress] = useState<number>(0);
+  const [isFpvMode, setIsFpvMode] = useState<boolean>(false);
 
   const [dronePosition, setDronePosition] = useState<CameraPosition>({
     longitude: -123.27185,
@@ -120,6 +152,44 @@ export default function CesiumViewer() {
     pitch: -45,
     roll: 0,
   });
+
+  useEffect(() => {
+    const buildingHeight = selected?.height ?? 15;
+    const heightFactor = Math.max(1, buildingHeight / 15);
+
+    let baseH = 30;
+    let baseV = 15;
+
+    switch (pattern) {
+      case "sphere":
+        baseH = 45;
+        baseV = 20;
+        break;
+      case "box_perimeter":
+        baseH = 40;
+        baseV = 15;
+        break;
+      case "grid":
+        baseH = 35;
+        baseV = 25;
+        break;
+      case "facade_scan":
+        baseH = 35;
+        baseV = 15;
+        break;
+      case "helix":
+      case "orbit":
+      default:
+        baseH = 30;
+        baseV = 12;
+        break;
+    }
+
+    setBuffer({
+      horizontal: Math.round(baseH * Math.min(heightFactor, 1.5)),
+      vertical: Math.round(baseV * Math.min(heightFactor, 1.4)),
+    });
+  }, [selected?.elementId, selected?.height, pattern]);
 
   const handleClick = useCallback(
     (movement: CesiumMovementEvent, pickedTarget: RootEventTarget) => {
@@ -233,11 +303,21 @@ export default function CesiumViewer() {
           />
         )}
 
-        <CameraFlyTo
-          destination={Cartesian3.fromDegrees(-123.262, 44.554, 600)}
-          orientation={{ heading: 0, pitch: CesiumMath.toRadians(-30), roll: 0 }}
-          once
-        />
+        {isFpvMode && (
+          <DroneCameraTracker
+            position={dronePosition}
+            orientation={droneOrientation}
+            active={isFpvMode}
+          />
+        )}
+
+        {!isFpvMode && (
+          <CameraFlyTo
+            destination={Cartesian3.fromDegrees(-123.262, 44.554, 600)}
+            orientation={{ heading: 0, pitch: CesiumMath.toRadians(-30), roll: 0 }}
+            once
+          />
+        )}
       </Viewer>
 
       {cameraPosition && (
@@ -303,6 +383,8 @@ export default function CesiumViewer() {
           progress={progress}
           onProgressChange={setProgress}
           waypoints={waypoints}
+          isFpvMode={isFpvMode}
+          onToggleFpv={() => setIsFpvMode((prev) => !prev)}
         />
       )}
     </>

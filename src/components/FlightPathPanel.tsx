@@ -16,6 +16,8 @@ type Props = {
   progress: number;
   onProgressChange: (progress: number) => void;
   waypoints: Waypoint[];
+  isFpvMode: boolean;
+  onToggleFpv: () => void;
 };
 
 export default function FlightPathPanel({
@@ -30,6 +32,8 @@ export default function FlightPathPanel({
   progress,
   onProgressChange,
   waypoints,
+  isFpvMode,
+  onToggleFpv,
 }: Props) {
   const activeMeta = FLIGHT_PATTERNS.find((p) => p.id === pattern);
 
@@ -92,7 +96,7 @@ export default function FlightPathPanel({
         />
       </div>
 
-      <div className="mt-3 flex items-center gap-2 border-t border-gray-200 pt-3">
+      <div className="mt-3 flex items-center justify-between gap-2 border-t border-gray-200 pt-3">
         <button
           type="button"
           onClick={onTogglePlay}
@@ -100,6 +104,17 @@ export default function FlightPathPanel({
         >
           {isPlaying ? "Pause" : "Fly"}
         </button>
+
+        <button
+          type="button"
+          onClick={onToggleFpv}
+          className={`rounded px-3 py-1 font-medium text-white ${
+            isFpvMode ? "bg-purple-700 hover:bg-purple-800" : "bg-gray-700 hover:bg-gray-800"
+          }`}
+        >
+          {isFpvMode ? "Exit FPV POV" : "Drone FPV POV"}
+        </button>
+
         <input
           type="range"
           min={0}
@@ -107,7 +122,7 @@ export default function FlightPathPanel({
           step={0.005}
           value={progress}
           onChange={(e) => onProgressChange(Number(e.target.value))}
-          className="w-full"
+          className="w-24"
           aria-label="Mission progress"
         />
       </div>
