@@ -15,6 +15,7 @@ The frontend currently provides:
 - A line from a fixed drone position to the selected building, with the drone orientation calculated to face it.
 - A readout of the viewer camera and drone camera position and orientation.
 - An operating bounding box generated around the selected building, with horizontal and vertical buffers adjustable in meters, and a containment check for planned waypoints. See [System design](docs/architecture/design.md#operating-bounding-box).
+- Extra flight zones (green) and no-flight zones (red) placed in meters from the selected building, with a workable-area containment check and the total workable ground area in m². See [System design](docs/architecture/design.md#flight-zones-and-no-flight-zones).
 
 Flight path generation and the planned backend are not built yet.
 
@@ -88,9 +89,9 @@ Follow these steps to set up and run the development environment from a clean cl
 │   ├── planning/       Requirements and risks
 │   └── process/        Contributing and issue guides
 └── src/
-    ├── components/     Cesium viewer, building info panel, and bounding box display and panel
+    ├── components/     Cesium viewer, building info panel, zone display, and zone panel and editor
     ├── App.tsx         Root component
-    ├── boundingBox.ts  Operating bounding box type, validation, and containment check
+    ├── boundingBox.ts  Bounding box and zone types, validation, containment, and workable area
     ├── cesiumIon.ts    Cesium ion token setup
     └── main.tsx        Application entry point
 ```
