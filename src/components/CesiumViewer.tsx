@@ -39,7 +39,7 @@ import FlightPathPanel from "./FlightPathPanel.tsx";
 type CameraPosition = {
   longitude: number;
   latitude: number;
-  height: number;
+  height: number; // meters AGL
 };
 
 const osmLayer = new ImageryLayer(
@@ -104,11 +104,15 @@ function DroneCameraTracker({
 
   useEffect(() => {
     if (!viewer || !active) return;
+
+    const carto = Cartographic.fromDegrees(position.longitude, position.latitude);
+    const groundHeight = viewer.scene.globe.getHeight(carto) ?? 0;
     const cartesianPos = Cartesian3.fromDegrees(
       position.longitude,
       position.latitude,
-      position.height,
+      groundHeight + position.height,
     );
+
     viewer.camera.setView({
       destination: cartesianPos,
       orientation: {
@@ -337,7 +341,7 @@ export default function CesiumViewer() {
           <strong>Camera Position</strong>
           <div>Longitude: {cameraPosition.longitude.toFixed(6)}°</div>
           <div>Latitude: {cameraPosition.latitude.toFixed(6)}°</div>
-          <div>Height: {cameraPosition.height.toFixed(2)} m</div>
+          <div>Height (AGL): {cameraPosition.height.toFixed(2)} m</div>
           <br />
           <strong>Camera Orientation</strong>
           <div>Heading: {cameraOrientation.heading.toFixed(3)}°</div>

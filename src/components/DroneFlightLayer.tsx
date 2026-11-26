@@ -1,14 +1,14 @@
 import {
   Cartesian2,
   Cartesian3,
+  Cartographic,
   Color,
-  HeightReference,
   LabelStyle,
   PolylineDashMaterialProperty,
   VerticalOrigin,
 } from "cesium";
-import { useEffect, useMemo } from "react";
-import { Entity } from "resium";
+import { useCallback, useEffect, useMemo } from "react";
+import { Entity, useCesium } from "resium";
 import type { Waypoint } from "../flightPath.ts";
 
 type Props = {
@@ -20,6 +20,13 @@ type Props = {
   onProgressChange: (next: number | ((prev: number) => number)) => void;
   onDroneTelemetry: (wp: Waypoint) => void;
 };
+
+function interpolateAngleDeg(a: number, b: number, t: number): number {
+  const start = ((a % 360) + 360) % 360;
+  const end = ((b % 360) + 360) % 360;
+  const delta = ((((end - start) % 360) + 540) % 360) - 180;
+  return (((start + delta * t) % 360) + 360) % 360;
+}
 
 function interpolateWaypoints(waypoints: Waypoint[], progress: number): Waypoint | null {
   if (waypoints.length === 0) return null;
@@ -37,7 +44,7 @@ function interpolateWaypoints(waypoints: Waypoint[], progress: number): Waypoint
     longitude: a.longitude + (b.longitude - a.longitude) * frac,
     latitude: a.latitude + (b.latitude - a.latitude) * frac,
     altitude: a.altitude + (b.altitude - a.altitude) * frac,
-    heading: a.heading + (b.heading - a.heading) * frac,
+    heading: interpolateAngleDeg(a.heading, b.heading, frac),
     pitch: a.pitch + (b.pitch - a.pitch) * frac,
   };
 }
@@ -51,15 +58,26 @@ export default function DroneFlightLayer({
   onProgressChange,
   onDroneTelemetry,
 }: Props) {
+  const { viewer } = useCesium();
+
+  const toTerrainCartesian = useCallback(
+    (longitude: number, latitude: number, aglAltitude: number) => {
+      const groundHeight =
+        viewer?.scene.globe.getHeight(Cartographic.fromDegrees(longitude, latitude)) ?? 0;
+      return Cartesian3.fromDegrees(longitude, latitude, groundHeight + aglAltitude);
+    },
+    [viewer],
+  );
+
   const totalDistanceM = useMemo(() => {
     let dist = 0;
     for (let i = 1; i < waypoints.length; i++) {
-      const a = Cartesian3.fromDegrees(
+      const a = toTerrainCartesian(
         waypoints[i - 1].longitude,
         waypoints[i - 1].latitude,
         waypoints[i - 1].altitude,
       );
-      const b = Cartesian3.fromDegrees(
+      const b = toTerrainCartesian(
         waypoints[i].longitude,
         waypoints[i].latitude,
         waypoints[i].altitude,
@@ -67,7 +85,7 @@ export default function DroneFlightLayer({
       dist += Cartesian3.distance(a, b);
     }
     return Math.max(dist, 1);
-  }, [waypoints]);
+  }, [waypoints, toTerrainCartesian]);
 
   useEffect(() => {
     if (!isPlaying || waypoints.length < 2) return;
@@ -102,21 +120,25 @@ export default function DroneFlightLayer({
 
   const pathPositions = useMemo(
     () =>
-      waypoints.map((wp) => Cartesian3.fromDegrees(wp.longitude, wp.latitude, wp.altitude)),
-    [waypoints],
+      waypoints.map((wp) => toTerrainCartesian(wp.longitude, wp.latitude, wp.altitude)),
+    [waypoints, toTerrainCartesian],
   );
 
   if (waypoints.length === 0) return null;
 
-  const targetAimCartesian = Cartesian3.fromDegrees(
+  const targetAimCartesian = toTerrainCartesian(
     targetBuilding.longitude,
     targetBuilding.latitude,
     (targetBuilding.height ?? 10) * 0.6,
   );
 
+  const activeDroneCartesian = activeDrone
+    ? toTerrainCartesian(activeDrone.longitude, activeDrone.latitude, activeDrone.altitude)
+    : null;
+
   return (
     <>
-      {/* Dashed Flight Path Trajectory to prevent visual blending with the bounding box */}
+      {/* Dashed Flight Path Trajectory */}
       <Entity
         name="Drone Flight Path"
         polyline={{
@@ -135,7 +157,7 @@ export default function DroneFlightLayer({
         const isStart = idx === 0;
         const isEnd = idx === waypoints.length - 1;
         const color = isStart ? Color.LIME : isEnd ? Color.RED : Color.ORANGE;
-        const pos = Cartesian3.fromDegrees(wp.longitude, wp.latitude, wp.altitude);
+        const pos = toTerrainCartesian(wp.longitude, wp.latitude, wp.altitude);
 
         return (
           <Entity
@@ -147,7 +169,6 @@ export default function DroneFlightLayer({
               color,
               outlineColor: Color.BLACK,
               outlineWidth: 1.5,
-              heightReference: HeightReference.RELATIVE_TO_GROUND,
             }}
             label={
               isStart || isEnd || idx % 4 === 0
@@ -160,7 +181,6 @@ export default function DroneFlightLayer({
                     style: LabelStyle.FILL_AND_OUTLINE,
                     verticalOrigin: VerticalOrigin.BOTTOM,
                     pixelOffset: new Cartesian2(0, -10),
-                    heightReference: HeightReference.RELATIVE_TO_GROUND,
                   }
                 : undefined
             }
@@ -169,21 +189,16 @@ export default function DroneFlightLayer({
       })}
 
       {/* Active Drone & Gimbal Sightline */}
-      {activeDrone && (
+      {activeDrone && activeDroneCartesian && (
         <>
           <Entity
             name="Active Drone"
-            position={Cartesian3.fromDegrees(
-              activeDrone.longitude,
-              activeDrone.latitude,
-              activeDrone.altitude,
-            )}
+            position={activeDroneCartesian}
             point={{
               pixelSize: 16,
               color: Color.CYAN,
               outlineColor: Color.WHITE,
               outlineWidth: 3,
-              heightReference: HeightReference.RELATIVE_TO_GROUND,
             }}
             label={{
               text: `DRONE (${activeDrone.altitude.toFixed(1)}m)`,
@@ -194,21 +209,13 @@ export default function DroneFlightLayer({
               style: LabelStyle.FILL_AND_OUTLINE,
               verticalOrigin: VerticalOrigin.BOTTOM,
               pixelOffset: new Cartesian2(0, -14),
-              heightReference: HeightReference.RELATIVE_TO_GROUND,
             }}
           />
 
           <Entity
             name="Drone Gimbal Sightline"
             polyline={{
-              positions: [
-                Cartesian3.fromDegrees(
-                  activeDrone.longitude,
-                  activeDrone.latitude,
-                  activeDrone.altitude,
-                ),
-                targetAimCartesian,
-              ],
+              positions: [activeDroneCartesian, targetAimCartesian],
               width: 2,
               material: Color.LIME.withAlpha(0.6),
             }}
