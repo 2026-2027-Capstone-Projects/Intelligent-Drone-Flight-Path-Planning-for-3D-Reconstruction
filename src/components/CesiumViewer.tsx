@@ -23,21 +23,20 @@ import {
   Viewer,
 } from "resium";
 import {
-  type BoundingBoxBuffer,
-  boundingBoxAroundBuilding,
-  DEFAULT_BUFFER,
-  DEFAULT_ZONE,
   type FlightZones,
+  type GroundPoint,
   workableGroundArea,
   type Zone,
   type ZoneKind,
   type ZoneSpec,
   zoneFromSpec,
+  zoneSpecFromCorners,
   zoneWarnings,
 } from "../boundingBox.ts";
 import BoundingBoxEntity from "./BoundingBoxEntity.tsx";
 import BoundingBoxPanel from "./BoundingBoxPanel.tsx";
 import BuildingInfoPanel, { type SelectedBuilding } from "./BuildingInfoPanel.tsx";
+import ZoneDrawTool from "./ZoneDrawTool.tsx";
 
 type CameraPosition = {
   longitude: number;
@@ -133,13 +132,14 @@ function calculateDroneOrientation(drone: CameraPosition, target: CameraPosition
 export default function CesiumViewer() {
   const viewerRef = useRef<CesiumComponentRef<CesiumViewerInstance>>(null);
   const [selected, setSelected] = useState<SelectedBuilding | null>(null);
-  // Space around the selected building that forms the drone's operating box. Kept across
-  // selections so a tuned buffer carries over to the next building.
-  const [buffer, setBuffer] = useState<BoundingBoxBuffer>(DEFAULT_BUFFER);
-  // User-added flight zones and no-flight zones. Each keeps the building it was created at as its
-  // anchor, so zones stay in place when the selection changes.
+  // Flight zones and no-flight zones drawn by the user. They don't depend on the selected
+  // building, so they stay in place when the selection changes.
   const [zones, setZones] = useState<Zone[]>([]);
   const nextZoneId = useRef(1);
+  // The kind of zone being drawn with the mouse, or null when draw mode is off.
+  const [drawKind, setDrawKind] = useState<ZoneKind | null>(null);
+  // Why the last drawing attempt didn't create a zone (e.g. the drag ended on the sky).
+  const [drawMessages, setDrawMessages] = useState<string[]>([]);
   // Camera Position
   const [cameraPosition, setCameraPosition] = useState<CameraPosition | null>(null);
   // Camera Orientation
@@ -218,26 +218,29 @@ export default function CesiumViewer() {
     [dronePosition],
   );
 
-  // Operating volume for the drone, generated around the selected building. `box` is null when
-  // nothing is selected or the generated bounds are invalid.
-  const boundingBoxResult = useMemo(
-    () => (selected ? boundingBoxAroundBuilding(selected, buffer) : null),
-    [selected, buffer],
-  );
-  const boundingBox = boundingBoxResult?.box ?? null;
-
-  const addZone = useCallback(
-    (kind: ZoneKind) => {
-      if (!selected) return;
-      const spec: ZoneSpec = {
-        anchorLongitude: selected.longitude,
-        anchorLatitude: selected.latitude,
-        ...DEFAULT_ZONE[kind],
-      };
+  const startDrawing = useCallback((kind: ZoneKind) => {
+    setDrawMessages([]);
+    setDrawKind(kind);
+  }, []);
+  const cancelDrawing = useCallback((message?: string) => {
+    setDrawKind(null);
+    setDrawMessages(message ? [message] : []);
+  }, []);
+  // Each drag creates at most one zone, then draw mode ends. The zone is turned to the camera
+  // heading the drag started with, so it lines up with the drag on screen.
+  const finishDrawing = useCallback(
+    (kind: ZoneKind, start: GroundPoint, end: GroundPoint, heading: number) => {
+      setDrawKind(null);
+      const { spec, messages } = zoneSpecFromCorners(kind, start, end, heading);
+      setDrawMessages(messages);
+      if (!spec) {
+        console.warn("Drawn zone rejected.", messages);
+        return;
+      }
       const id = `zone-${nextZoneId.current++}`;
       setZones((prev) => [...prev, { id, kind, spec }]);
     },
-    [selected],
+    [],
   );
   const updateZone = useCallback((id: string, spec: ZoneSpec) => {
     setZones((prev) => prev.map((zone) => (zone.id === id ? { ...zone, spec } : zone)));
@@ -251,15 +254,11 @@ export default function CesiumViewer() {
     () => zones.map((zone) => ({ ...zone, box: zoneFromSpec(zone.spec).box })),
     [zones],
   );
-  // The building zone counts as the first flight zone.
   const flightZones = useMemo<FlightZones>(() => {
     const boxesOf = (kind: ZoneKind) =>
       zoneBoxes.flatMap((zone) => (zone.kind === kind && zone.box ? [zone.box] : []));
-    return {
-      flight: [...(boundingBox ? [boundingBox] : []), ...boxesOf("flight")],
-      noFlight: boxesOf("noFlight"),
-    };
-  }, [boundingBox, zoneBoxes]);
+    return { flight: boxesOf("flight"), noFlight: boxesOf("noFlight") };
+  }, [zoneBoxes]);
   const workableArea = useMemo(() => workableGroundArea(flightZones), [flightZones]);
   const zoneMessages = useMemo(
     () => zoneWarnings(flightZones, workableArea),
@@ -318,10 +317,10 @@ export default function CesiumViewer() {
         )}
 
         <Cesium3DTileset url={osmBuildingsUrl} style={tilesetStyle} />
-        {boundingBox && <BoundingBoxEntity box={boundingBox} name="Building zone" />}
         {zoneBoxes.map(
           (zone) => zone.box && <BoundingBoxEntity key={zone.id} box={zone.box} kind={zone.kind} />,
         )}
+        <ZoneDrawTool kind={drawKind} onComplete={finishDrawing} onCancel={cancelDrawing} />
         {/* Oblique view looking north over downtown Corvallis, Oregon */}
         <CameraFlyTo
           destination={Cartesian3.fromDegrees(-123.262, 44.554, 600)}
@@ -366,21 +365,17 @@ export default function CesiumViewer() {
       )}
 
       {selected && <BuildingInfoPanel building={selected} onClose={() => setSelected(null)} />}
-      {(selected || zones.length > 0) && (
-        <BoundingBoxPanel
-          buildingSelected={selected !== null}
-          buffer={buffer}
-          onBufferChange={setBuffer}
-          box={boundingBox}
-          messages={boundingBoxResult?.messages ?? []}
-          zones={zones}
-          onAddZone={addZone}
-          onUpdateZone={updateZone}
-          onRemoveZone={removeZone}
-          workableArea={workableArea}
-          zoneMessages={zoneMessages}
-        />
-      )}
+      <BoundingBoxPanel
+        zones={zones}
+        drawingKind={drawKind}
+        onStartDrawing={startDrawing}
+        onCancelDrawing={cancelDrawing}
+        drawMessages={drawMessages}
+        onUpdateZone={updateZone}
+        onRemoveZone={removeZone}
+        workableArea={workableArea}
+        zoneMessages={zoneMessages}
+      />
     </>
   );
 }

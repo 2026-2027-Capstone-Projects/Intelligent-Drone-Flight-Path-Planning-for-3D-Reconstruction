@@ -1,43 +1,37 @@
-import {
-  Cartesian3,
-  Cartographic,
-  Math as CesiumMath,
-  EllipsoidGeodesic,
-  Matrix4,
-  Rectangle,
-  Transforms,
-} from "cesium";
+import { Cartesian3, Cartographic, Math as CesiumMath, Matrix4, Transforms } from "cesium";
 
 /**
- * The drone's operating bounding box: a 3D volume that planned flight paths must stay inside.
- * One box is generated around the selected building (see `boundingBoxAroundBuilding`). The same
- * type describes each flight zone and no-flight zone (see `FlightZones`).
+ * A 3D box on the globe: the shape of every flight zone and no-flight zone (see `FlightZones`).
+ * The user draws each zone's footprint on the terrain with the mouse (see `zoneSpecFromCorners`),
+ * then sets its altitudes. Planned flight paths must stay inside the flight zones.
  *
- * Coordinate conventions:
- * - `west`, `south`, `east`, `north` are WGS84 longitude/latitude in **degrees**.
+ * The box can be rotated, so it's stored as a center, a size, and a heading rather than
+ * west/south/east/north edges. Coordinate conventions:
+ * - `centerLongitude` and `centerLatitude` are WGS84 longitude/latitude in **degrees**.
+ * - `width` and `depth` are in **meters**, measured in the local east-north-up plane at the
+ *   center. `depth` runs along the heading and `width` runs across it.
+ * - `heading` is in **degrees clockwise from north**, in [0, 360). At heading 0, `depth` runs
+ *   north-south and `width` east-west.
  * - `minAltitude` and `maxAltitude` are **meters above ground level (AGL)**, measured from the
  *   terrain directly below the point. They are not ellipsoid or sea-level heights.
- * - Edges are inclusive. A point exactly on an edge, or exactly at the min or max altitude, is
- *   inside.
- * - The box cannot cross the antimeridian, so `west` must be less than `east`.
+ * - Edges are inclusive. A point exactly on an edge (to within 1 mm), or exactly at the min or max
+ *   altitude, is inside.
  *
  * The box is kept as plain numbers so the UI and a future backend payload can share it. Use
- * `toRectangle` to get the Cesium form.
+ * `boxCorners` for the corners in degrees.
  */
 export type BoundingBox = {
-  west: number; // degrees
-  south: number; // degrees
-  east: number; // degrees
-  north: number; // degrees
+  centerLongitude: number; // degrees
+  centerLatitude: number; // degrees
+  width: number; // meters, across the heading
+  depth: number; // meters, along the heading
+  heading: number; // degrees clockwise from north, [0, 360)
   minAltitude: number; // meters AGL
   maxAltitude: number; // meters AGL
 };
 
-/** Space added around the building, in meters. */
-export type BoundingBoxBuffer = {
-  horizontal: number; // meters added on each of the four sides
-  vertical: number; // meters added above the roof
-};
+/** A point on the ground, in WGS84 degrees. */
+export type GroundPoint = { longitude: number; latitude: number };
 
 /**
  * Highest allowed `maxAltitude`, in meters AGL. FAA Part 107 limits small drones to 400 ft
@@ -45,23 +39,96 @@ export type BoundingBoxBuffer = {
  */
 export const MAX_ALTITUDE_AGL_M = 120;
 
+/** How far outside an edge, in meters, a point can be and still count as on the edge. */
+const EDGE_TOLERANCE_M = 0.001;
+
+/** A position in a local east-north-up plane, in meters (`x` east, `y` north). */
+type LocalPoint = { x: number; y: number };
+
+/** Wraps a heading in degrees into [0, 360). */
+export function normalizeHeading(degrees: number): number {
+  const wrapped = ((degrees % 360) + 360) % 360;
+  return wrapped === 360 ? 0 : wrapped;
+}
+
+/** The box's center as a `GroundPoint`. */
+export function boxCenter(box: BoundingBox): GroundPoint {
+  return { longitude: box.centerLongitude, latitude: box.centerLatitude };
+}
+
 /**
- * Assumed building width and depth, in meters, centered on the building's OSM centroid.
- * Cesium OSM Buildings features carry a centroid and height but no footprint, so the real size
- * isn't available. Long or large buildings can extend past this estimate.
+ * Returns the point offset from an origin by a distance in meters along the local east and north
+ * axes. Uses Cesium's east-north-up frame instead of converting meters to degrees by hand.
  */
-export const ESTIMATED_FOOTPRINT_M = 30;
+function offsetByMeters(origin: GroundPoint, east: number, north: number): GroundPoint {
+  const enuToFixed = Transforms.eastNorthUpToFixedFrame(
+    Cartesian3.fromDegrees(origin.longitude, origin.latitude),
+  );
+  const offset = Matrix4.multiplyByPoint(
+    enuToFixed,
+    new Cartesian3(east, north, 0),
+    new Cartesian3(),
+  );
+  const cartographic = Cartographic.fromCartesian(offset);
+  return {
+    longitude: CesiumMath.toDegrees(cartographic.longitude),
+    latitude: CesiumMath.toDegrees(cartographic.latitude),
+  };
+}
 
-/** Assumed building height, in meters, when the feature has no `cesium#estimatedHeight`. */
-export const FALLBACK_BUILDING_HEIGHT_M = 10;
+/**
+ * Returns where a point lies in the origin's local east-north-up plane, in meters. The inverse of
+ * `offsetByMeters` (to well under a millimeter at site scale).
+ */
+function toLocalMeters(origin: GroundPoint, point: GroundPoint): LocalPoint {
+  const fixedToEnu = Matrix4.inverseTransformation(
+    Transforms.eastNorthUpToFixedFrame(Cartesian3.fromDegrees(origin.longitude, origin.latitude)),
+    new Matrix4(),
+  );
+  const local = Matrix4.multiplyByPoint(
+    fixedToEnu,
+    Cartesian3.fromDegrees(point.longitude, point.latitude),
+    new Cartesian3(),
+  );
+  return { x: local.x, y: local.y };
+}
 
-export const DEFAULT_BUFFER: BoundingBoxBuffer = { horizontal: 20, vertical: 10 };
-export const BUFFER_STEP_M = 5;
-export const MAX_HORIZONTAL_BUFFER_M = 200;
+/** Unit vectors in the local plane: `forward` along a heading, `right` across it. */
+function headingAxes(headingDegrees: number): { forward: LocalPoint; right: LocalPoint } {
+  const heading = CesiumMath.toRadians(headingDegrees);
+  return {
+    forward: { x: Math.sin(heading), y: Math.cos(heading) },
+    right: { x: Math.cos(heading), y: -Math.sin(heading) },
+  };
+}
 
-/** Converts the box's horizontal bounds to a Cesium `Rectangle` (radians). */
-export function toRectangle(box: BoundingBox): Rectangle {
-  return Rectangle.fromDegrees(box.west, box.south, box.east, box.north);
+const dot = (a: LocalPoint, b: LocalPoint) => a.x * b.x + a.y * b.y;
+
+/** The box's corners in its center's local plane, clockwise from the front-left corner. */
+function localCorners(box: BoundingBox): LocalPoint[] {
+  const { forward, right } = headingAxes(box.heading);
+  const halfWidth = box.width / 2;
+  const halfDepth = box.depth / 2;
+  return [
+    [-1, 1],
+    [1, 1],
+    [1, -1],
+    [-1, -1],
+  ].map(([across, along]) => ({
+    x: across * halfWidth * right.x + along * halfDepth * forward.x,
+    y: across * halfWidth * right.y + along * halfDepth * forward.y,
+  }));
+}
+
+/** The box's four corners in degrees, clockwise (seen from above). */
+export function boxCorners(box: BoundingBox): GroundPoint[] {
+  const center = boxCenter(box);
+  return localCorners(box).map((corner) => offsetByMeters(center, corner.x, corner.y));
+}
+
+/** The box's corners in another point's local plane, in meters. */
+function cornersIn(origin: GroundPoint, box: BoundingBox): LocalPoint[] {
+  return boxCorners(box).map((corner) => toLocalMeters(origin, corner));
 }
 
 /**
@@ -72,10 +139,11 @@ export function validateBoundingBox(box: BoundingBox): string[] {
   const errors: string[] = [];
 
   const fields: [keyof BoundingBox, string][] = [
-    ["west", "West"],
-    ["south", "South"],
-    ["east", "East"],
-    ["north", "North"],
+    ["centerLongitude", "Center longitude"],
+    ["centerLatitude", "Center latitude"],
+    ["width", "Width"],
+    ["depth", "Depth"],
+    ["heading", "Rotation"],
     ["minAltitude", "Min altitude"],
     ["maxAltitude", "Max altitude"],
   ];
@@ -85,23 +153,14 @@ export function validateBoundingBox(box: BoundingBox): string[] {
   // The range and ordering checks below are meaningless without numbers.
   if (errors.length > 0) return errors;
 
-  for (const [value, label] of [
-    [box.west, "West"],
-    [box.east, "East"],
-  ] as const) {
-    if (value < -180 || value > 180) errors.push(`${label} must be between -180° and 180°.`);
+  if (box.centerLongitude < -180 || box.centerLongitude > 180) {
+    errors.push("Center longitude must be between -180° and 180°.");
   }
-  for (const [value, label] of [
-    [box.south, "South"],
-    [box.north, "North"],
-  ] as const) {
-    if (value < -90 || value > 90) errors.push(`${label} must be between -90° and 90°.`);
+  if (box.centerLatitude < -90 || box.centerLatitude > 90) {
+    errors.push("Center latitude must be between -90° and 90°.");
   }
-
-  if (box.south >= box.north) errors.push("South must be less than north.");
-  if (box.west >= box.east) {
-    errors.push("West must be less than east (boxes crossing the antimeridian aren't supported).");
-  }
+  if (box.width <= 0) errors.push("Width must be greater than 0 m.");
+  if (box.depth <= 0) errors.push("Depth must be greater than 0 m.");
 
   if (box.minAltitude < 0) errors.push("Min altitude can't be below ground (0 m).");
   if (box.maxAltitude > MAX_ALTITUDE_AGL_M) {
@@ -114,120 +173,9 @@ export function validateBoundingBox(box: BoundingBox): string[] {
   return errors;
 }
 
-/** Checks a buffer and returns one readable message per problem. Empty means valid. */
-export function validateBuffer(buffer: BoundingBoxBuffer): string[] {
-  const errors: string[] = [];
-  for (const [value, label] of [
-    [buffer.horizontal, "Horizontal buffer"],
-    [buffer.vertical, "Vertical buffer"],
-  ] as const) {
-    if (!Number.isFinite(value)) errors.push(`${label} must be a number.`);
-    else if (value < 0) errors.push(`${label} can't be negative.`);
-  }
-  if (buffer.horizontal > MAX_HORIZONTAL_BUFFER_M) {
-    errors.push(`Horizontal buffer can't exceed ${MAX_HORIZONTAL_BUFFER_M} m.`);
-  }
-  return errors;
-}
-
 /**
- * Returns the longitude and latitude, in degrees, of a point offset from an origin by a distance
- * in meters along the local east and north axes. Uses Cesium's east-north-up frame instead of
- * converting meters to degrees by hand.
- */
-function offsetByMeters(
-  longitude: number,
-  latitude: number,
-  eastMeters: number,
-  northMeters: number,
-): { longitude: number; latitude: number } {
-  const enuToFixed = Transforms.eastNorthUpToFixedFrame(
-    Cartesian3.fromDegrees(longitude, latitude),
-  );
-  const offset = Matrix4.multiplyByPoint(
-    enuToFixed,
-    new Cartesian3(eastMeters, northMeters, 0),
-    new Cartesian3(),
-  );
-  const cartographic = Cartographic.fromCartesian(offset);
-  return {
-    longitude: CesiumMath.toDegrees(cartographic.longitude),
-    latitude: CesiumMath.toDegrees(cartographic.latitude),
-  };
-}
-
-/**
- * Builds a box centered on a point, extending `halfWidth` meters east and west and `halfDepth`
- * meters north and south. Each edge is measured along the center lines through the point. The
- * result isn't validated.
- */
-function boxAroundPoint(
-  longitude: number,
-  latitude: number,
-  halfWidth: number,
-  halfDepth: number,
-  minAltitude: number,
-  maxAltitude: number,
-): BoundingBox {
-  return {
-    west: offsetByMeters(longitude, latitude, -halfWidth, 0).longitude,
-    south: offsetByMeters(longitude, latitude, 0, -halfDepth).latitude,
-    east: offsetByMeters(longitude, latitude, halfWidth, 0).longitude,
-    north: offsetByMeters(longitude, latitude, 0, halfDepth).latitude,
-    minAltitude,
-    maxAltitude,
-  };
-}
-
-/**
- * Builds the operating box around a building. It covers the estimated footprint
- * (`ESTIMATED_FOOTPRINT_M` square, centered on the building) plus `buffer.horizontal` on each
- * side. It runs from the ground (0 m AGL) to the roof plus `buffer.vertical`, capped at
- * `MAX_ALTITUDE_AGL_M`.
- *
- * Returns `box: null` when the result is invalid, with the reasons in `messages`. Otherwise
- * `messages` holds notes about estimates and caps, for display to the user.
- *
- * @param building Centroid in degrees and height in meters (AGL), as read from OSM Buildings.
- */
-export function boundingBoxAroundBuilding(
-  building: { longitude: number; latitude: number; height?: number },
-  buffer: BoundingBoxBuffer,
-): { box: BoundingBox | null; messages: string[] } {
-  const messages: string[] = [];
-
-  let buildingHeight = building.height;
-  if (buildingHeight === undefined || !Number.isFinite(buildingHeight)) {
-    buildingHeight = FALLBACK_BUILDING_HEIGHT_M;
-    messages.push(`Building height unknown; assuming ${FALLBACK_BUILDING_HEIGHT_M} m.`);
-  }
-
-  const top = buildingHeight + buffer.vertical;
-  if (buildingHeight >= MAX_ALTITUDE_AGL_M) {
-    messages.push(
-      `Building is taller than the ${MAX_ALTITUDE_AGL_M} m limit; the box doesn't cover its top.`,
-    );
-  } else if (top > MAX_ALTITUDE_AGL_M) {
-    messages.push(`Top capped at ${MAX_ALTITUDE_AGL_M} m AGL (FAA Part 107 limit).`);
-  }
-
-  const halfSize = ESTIMATED_FOOTPRINT_M / 2 + buffer.horizontal;
-  const box = boxAroundPoint(
-    building.longitude,
-    building.latitude,
-    halfSize,
-    halfSize,
-    0,
-    Math.min(top, MAX_ALTITUDE_AGL_M),
-  );
-
-  const errors = validateBoundingBox(box);
-  if (errors.length > 0) return { box: null, messages: errors };
-  return { box, messages };
-}
-
-/**
- * Returns whether a point is inside the box, edges included.
+ * Returns whether a point is inside the box, edges included. The point is moved into the box's
+ * local plane and turned by the box's heading, then compared with the half width and half depth.
  *
  * @param longitude WGS84 longitude in degrees.
  * @param latitude WGS84 latitude in degrees.
@@ -239,10 +187,12 @@ export function isInsideBoundingBox(
   latitude: number,
   height: number,
 ): boolean {
+  if (height < box.minAltitude || height > box.maxAltitude) return false;
+  const point = toLocalMeters(boxCenter(box), { longitude, latitude });
+  const { forward, right } = headingAxes(box.heading);
   return (
-    Rectangle.contains(toRectangle(box), Cartographic.fromDegrees(longitude, latitude)) &&
-    height >= box.minAltitude &&
-    height <= box.maxAltitude
+    Math.abs(dot(point, right)) <= box.width / 2 + EDGE_TOLERANCE_M &&
+    Math.abs(dot(point, forward)) <= box.depth / 2 + EDGE_TOLERANCE_M
   );
 }
 
@@ -269,9 +219,9 @@ export type FlightZones = {
 };
 
 /**
- * A user-added zone as it's entered in the panel: a rectangle in meters, placed relative to an
- * anchor point. The anchor is the building that was selected when the zone was created. It's
- * stored with the zone so the zone stays in place when a different building is selected.
+ * A user-added zone as it's edited in the panel: a rotated rectangle in meters, placed relative
+ * to an anchor point. The anchor is the center of the rectangle the user drew, so a freshly drawn
+ * zone has zero offsets. The offsets let the user nudge the zone afterwards without redrawing it.
  * Use `zoneFromSpec` to get the zone's `BoundingBox`.
  */
 export type ZoneSpec = {
@@ -279,8 +229,9 @@ export type ZoneSpec = {
   anchorLatitude: number; // degrees
   offsetEast: number; // meters from the anchor to the zone's center (east is positive)
   offsetNorth: number; // meters from the anchor to the zone's center (north is positive)
-  width: number; // meters, east-west
-  depth: number; // meters, north-south
+  width: number; // meters, across the heading
+  depth: number; // meters, along the heading
+  heading: number; // degrees clockwise from north
   minAltitude: number; // meters AGL
   maxAltitude: number; // meters AGL
 };
@@ -300,30 +251,19 @@ export const MAX_ZONE_OFFSET_M = 2000;
 /** The editable part of a `ZoneSpec` (everything except the anchor). */
 export type ZoneShape = Omit<ZoneSpec, "anchorLongitude" | "anchorLatitude">;
 
-/** Shape of a newly added zone, centered on the anchor. */
-export const DEFAULT_ZONE: Record<ZoneKind, ZoneShape> = {
-  flight: {
-    offsetEast: 0,
-    offsetNorth: 0,
-    width: 100,
-    depth: 100,
-    minAltitude: 0,
-    maxAltitude: 60,
-  },
+/** Altitudes given to a newly drawn zone, in meters AGL. The user can change them afterwards. */
+export const DEFAULT_ZONE_ALTITUDE: Record<
+  ZoneKind,
+  Pick<ZoneShape, "minAltitude" | "maxAltitude">
+> = {
+  flight: { minAltitude: 0, maxAltitude: 60 },
   // A new no-flight zone blocks every altitude.
-  noFlight: {
-    offsetEast: 0,
-    offsetNorth: 0,
-    width: 20,
-    depth: 20,
-    minAltitude: 0,
-    maxAltitude: MAX_ALTITUDE_AGL_M,
-  },
+  noFlight: { minAltitude: 0, maxAltitude: MAX_ALTITUDE_AGL_M },
 };
 
 /**
  * Converts a zone entered in meters into a `BoundingBox`. The anchor is offset to the zone's
- * center in a local east-north-up frame, then the edges are measured from the center.
+ * center in a local east-north-up frame, and the heading is wrapped into [0, 360).
  *
  * Returns `box: null` when the spec or the resulting box is invalid, with the reasons in
  * `messages`.
@@ -338,6 +278,7 @@ export function zoneFromSpec(spec: ZoneSpec): { box: BoundingBox | null; message
     ["offsetNorth", "North offset"],
     ["width", "Width"],
     ["depth", "Depth"],
+    ["heading", "Rotation"],
     ["minAltitude", "Min altitude"],
     ["maxAltitude", "Max altitude"],
   ];
@@ -364,25 +305,124 @@ export function zoneFromSpec(spec: ZoneSpec): { box: BoundingBox | null; message
   if (errors.length > 0) return { box: null, messages: errors };
 
   const center = offsetByMeters(
-    spec.anchorLongitude,
-    spec.anchorLatitude,
+    { longitude: spec.anchorLongitude, latitude: spec.anchorLatitude },
     spec.offsetEast,
     spec.offsetNorth,
   );
-  const box = boxAroundPoint(
-    center.longitude,
-    center.latitude,
-    spec.width / 2,
-    spec.depth / 2,
-    spec.minAltitude,
-    spec.maxAltitude,
-  );
+  const box: BoundingBox = {
+    centerLongitude: center.longitude,
+    centerLatitude: center.latitude,
+    width: spec.width,
+    depth: spec.depth,
+    heading: normalizeHeading(spec.heading),
+    minAltitude: spec.minAltitude,
+    maxAltitude: spec.maxAltitude,
+  };
 
   // Catches the altitude limits and any out-of-range coordinates.
   const boxErrors = validateBoundingBox(box);
   if (boxErrors.length > 0) return { box: null, messages: boxErrors };
   return { box, messages: [] };
 }
+
+// ---------------------------------------------------------------------------
+// Drawing zones with the mouse (PBI-07)
+// ---------------------------------------------------------------------------
+
+/**
+ * Smallest width or depth, in meters, that a drawn zone may have. Smaller drags are usually a
+ * click or a slipped mouse rather than a real zone.
+ */
+export const MIN_DRAWN_ZONE_SIZE_M = 2;
+
+/**
+ * Splits a drag from corner `a` to corner `b` into its components along and across a heading,
+ * measured in `a`'s local plane.
+ */
+function dragComponents(a: GroundPoint, b: GroundPoint, headingDegrees: number) {
+  const diagonal = toLocalMeters(a, b);
+  const { forward, right } = headingAxes(headingDegrees);
+  return {
+    diagonal,
+    forward,
+    right,
+    along: dot(diagonal, forward),
+    across: dot(diagonal, right),
+  };
+}
+
+/**
+ * The four corners of the rectangle dragged from corner `a` to the opposite corner `b`, with its
+ * sides along and across `headingDegrees`. Used for the live preview while dragging.
+ */
+export function dragCorners(a: GroundPoint, b: GroundPoint, headingDegrees: number): GroundPoint[] {
+  const { forward, right, along, across } = dragComponents(a, b, headingDegrees);
+  return [
+    a,
+    offsetByMeters(a, across * right.x, across * right.y),
+    b,
+    offsetByMeters(a, along * forward.x, along * forward.y),
+  ];
+}
+
+/** Rounds to two decimal places (centimeters, or hundredths of a degree). */
+const roundToHundredths = (value: number) => Math.round(value * 100) / 100;
+
+/**
+ * Converts a rectangle dragged on the ground, from corner `a` to the opposite corner `b`, into a
+ * zone spec. The rectangle's sides run along and across `headingDegrees`, which the drawing tool
+ * sets to the camera's heading so the box lines up with the drag on screen. The corners can be in
+ * any order (any drag direction), and `a` and `b` end up as opposite corners of the zone.
+ *
+ * The anchor is the rectangle's center, with zero offsets. The width and depth are rounded to the
+ * centimeter and the heading to 0.01° so the editor's inputs show readable numbers. The altitudes
+ * start at `DEFAULT_ZONE_ALTITUDE[kind]`.
+ *
+ * Returns `spec: null` when the drag is too small or the zone is invalid (for example larger than
+ * `MAX_ZONE_SIZE_M`), with the reasons in `messages`.
+ */
+export function zoneSpecFromCorners(
+  kind: ZoneKind,
+  a: GroundPoint,
+  b: GroundPoint,
+  headingDegrees: number,
+): { spec: ZoneSpec | null; messages: string[] } {
+  for (const value of [a.longitude, a.latitude, b.longitude, b.latitude, headingDegrees]) {
+    if (!Number.isFinite(value)) {
+      return { spec: null, messages: ["The drawn corners aren't valid coordinates."] };
+    }
+  }
+
+  const { diagonal, along, across } = dragComponents(a, b, headingDegrees);
+  const width = Math.abs(across);
+  const depth = Math.abs(along);
+  if (width < MIN_DRAWN_ZONE_SIZE_M || depth < MIN_DRAWN_ZONE_SIZE_M) {
+    return {
+      spec: null,
+      messages: [`Drag a larger area (at least ${MIN_DRAWN_ZONE_SIZE_M} m on each side).`],
+    };
+  }
+
+  const center = offsetByMeters(a, diagonal.x / 2, diagonal.y / 2);
+  const spec: ZoneSpec = {
+    anchorLongitude: center.longitude,
+    anchorLatitude: center.latitude,
+    offsetEast: 0,
+    offsetNorth: 0,
+    width: roundToHundredths(width),
+    depth: roundToHundredths(depth),
+    heading: normalizeHeading(roundToHundredths(normalizeHeading(headingDegrees))),
+    ...DEFAULT_ZONE_ALTITUDE[kind],
+  };
+
+  // Reuses the size limits and the box checks the editor applies.
+  const { box, messages } = zoneFromSpec(spec);
+  return box ? { spec, messages: [] } : { spec: null, messages };
+}
+
+// ---------------------------------------------------------------------------
+// Workable area
+// ---------------------------------------------------------------------------
 
 /**
  * Returns whether a point is inside the workable area: inside at least one flight zone and inside
@@ -434,68 +474,135 @@ function remainingLength(allowed: Interval[], blocked: Interval[]): number {
 
 const uniqueSorted = (values: number[]) => [...new Set(values)].sort((a, b) => a - b);
 
+const cross = (a: LocalPoint, b: LocalPoint) => a.x * b.y - a.y * b.x;
+const minus = (a: LocalPoint, b: LocalPoint): LocalPoint => ({ x: a.x - b.x, y: a.y - b.y });
+
+type Segment = [LocalPoint, LocalPoint];
+
+/** The polygon's edges, each from one corner to the next. */
+const edgesOf = (polygon: LocalPoint[]): Segment[] =>
+  polygon.map((corner, i) => [corner, polygon[(i + 1) % polygon.length]]);
+
+/** The x coordinate where two segments cross, or undefined when they don't (or are parallel). */
+function crossingX([p1, p2]: Segment, [q1, q2]: Segment): number | undefined {
+  const p = minus(p2, p1);
+  const q = minus(q2, q1);
+  const denominator = cross(p, q);
+  // Parallel edges only meet at their endpoints, which are already breakpoints.
+  if (Math.abs(denominator) < 1e-12) return undefined;
+  const start = minus(q1, p1);
+  const t = cross(start, q) / denominator;
+  const u = cross(start, p) / denominator;
+  if (t < 0 || t > 1 || u < 0 || u > 1) return undefined;
+  return p1.x + t * p.x;
+}
+
+/**
+ * The y range a convex polygon covers on the vertical line at `x`, or null when the line misses
+ * it. `x` must not be the x of a corner.
+ */
+function verticalSpan(polygon: LocalPoint[], x: number): Interval | null {
+  const ys: number[] = [];
+  for (const [p, q] of edgesOf(polygon)) {
+    if ((p.x - x) * (q.x - x) < 0) ys.push(p.y + ((x - p.x) * (q.y - p.y)) / (q.x - p.x));
+  }
+  return ys.length >= 2 ? [Math.min(...ys), Math.max(...ys)] : null;
+}
+
 /**
  * Returns the workable ground area in square meters: the ground below which some altitude is
  * still workable. That is the union of the flight zones minus the no-flight zones. A no-flight
  * zone only removes ground where it blocks every altitude the flight zones allow there.
  *
- * The zones' edges split the area into a grid of cells, and every zone either fully covers a cell
- * or doesn't touch it. A cell counts when its flight altitude bands, minus its no-flight bands,
- * leave some height. Each cell's width and height are measured on the WGS84 ellipsoid with
- * Cesium's `EllipsoidGeodesic`, along the cell's middle parallel and meridian. At site scale
- * (up to a few kilometers) the result is accurate to well under 0.1%.
+ * Every zone's corners are placed in one local east-north-up plane, centered on the first flight
+ * zone. The plane is cut into vertical slabs at every corner and at every point where two edges
+ * cross. Inside a slab no edges cross, so along any vertical line the zones keep the same order
+ * and the workable length changes linearly. Measuring that length at the slab's middle and
+ * multiplying by the slab's width gives the slab's exact area. At site scale (up to a few
+ * kilometers) the flat local plane is accurate to well under 0.1%.
  */
 export function workableGroundArea(zones: FlightZones): number {
   if (zones.flight.length === 0) return 0;
 
-  const all = [...zones.flight, ...zones.noFlight];
-  const longitudes = uniqueSorted(all.flatMap((box) => [box.west, box.east]));
-  const latitudes = uniqueSorted(all.flatMap((box) => [box.south, box.north]));
-  const flight = zones.flight.map((box) => ({ box, rectangle: toRectangle(box) }));
-  const noFlight = zones.noFlight.map((box) => ({ box, rectangle: toRectangle(box) }));
+  const origin = boxCenter(zones.flight[0]);
+  const toLocal = (box: BoundingBox) => ({
+    polygon: cornersIn(origin, box),
+    band: [box.minAltitude, box.maxAltitude] as Interval,
+  });
+  const flight = zones.flight.map(toLocal);
+  const noFlight = zones.noFlight.map(toLocal);
 
-  const geodesic = new EllipsoidGeodesic();
-  const distance = (lon1: number, lat1: number, lon2: number, lat2: number) => {
-    geodesic.setEndPoints(
-      Cartographic.fromDegrees(lon1, lat1),
-      Cartographic.fromDegrees(lon2, lat2),
-    );
-    return geodesic.surfaceDistance;
-  };
+  const edges = [...flight, ...noFlight].flatMap(({ polygon }) => edgesOf(polygon));
+  const breakpoints = edges.map(([start]) => start.x);
+  for (let i = 0; i < edges.length; i++) {
+    for (let j = i + 1; j < edges.length; j++) {
+      const x = crossingX(edges[i], edges[j]);
+      if (x !== undefined) breakpoints.push(x);
+    }
+  }
+  const xs = uniqueSorted(breakpoints);
 
   let area = 0;
-  for (let i = 0; i < longitudes.length - 1; i++) {
-    for (let j = 0; j < latitudes.length - 1; j++) {
-      const [west, east] = [longitudes[i], longitudes[i + 1]];
-      const [south, north] = [latitudes[j], latitudes[j + 1]];
-      // A cell's center is never on a zone edge, so testing it decides the whole cell.
-      const center = Cartographic.fromDegrees((west + east) / 2, (south + north) / 2);
-      const bandsCovering = (list: typeof flight): Interval[] =>
-        list
-          .filter(({ rectangle }) => Rectangle.contains(rectangle, center))
-          .map(({ box }) => [box.minAltitude, box.maxAltitude]);
+  for (let i = 0; i < xs.length - 1; i++) {
+    const slabWidth = xs[i + 1] - xs[i];
+    if (slabWidth <= 0) continue;
+    const middleX = (xs[i] + xs[i + 1]) / 2;
+    const spansAt = (list: typeof flight) =>
+      list.flatMap(({ polygon, band }) => {
+        const span = verticalSpan(polygon, middleX);
+        return span ? [{ span, band }] : [];
+      });
 
-      const flightBands = bandsCovering(flight);
+    const flightSpans = spansAt(flight);
+    if (flightSpans.length === 0) continue;
+    const noFlightSpans = spansAt(noFlight);
+
+    // The same band logic as a 1-D problem along the line: split it at every span end, and keep
+    // each piece whose flight bands, minus its no-flight bands, leave some height.
+    const ys = uniqueSorted([...flightSpans, ...noFlightSpans].flatMap(({ span }) => span));
+    let workableLength = 0;
+    for (let j = 0; j < ys.length - 1; j++) {
+      const middleY = (ys[j] + ys[j + 1]) / 2;
+      const bandsCovering = (spans: typeof flightSpans) =>
+        spans.filter(({ span }) => span[0] < middleY && middleY < span[1]).map(({ band }) => band);
+      const flightBands = bandsCovering(flightSpans);
       if (flightBands.length === 0) continue;
-      if (remainingLength(flightBands, bandsCovering(noFlight)) <= 0) continue;
-
-      const middleLatitude = (south + north) / 2;
-      const middleLongitude = (west + east) / 2;
-      area +=
-        distance(west, middleLatitude, east, middleLatitude) *
-        distance(middleLongitude, south, middleLongitude, north);
+      if (remainingLength(flightBands, bandsCovering(noFlightSpans)) <= 0) continue;
+      workableLength += ys[j + 1] - ys[j];
     }
+    area += workableLength * slabWidth;
   }
   return area;
 }
 
+/**
+ * Whether two convex polygons share some area, by the separating axis test. Polygons that only
+ * touch along an edge or at a corner don't count.
+ */
+function polygonsOverlap(a: LocalPoint[], b: LocalPoint[]): boolean {
+  const project = (polygon: LocalPoint[], axis: LocalPoint) => {
+    const values = polygon.map((corner) => dot(corner, axis));
+    return [Math.min(...values), Math.max(...values)] as const;
+  };
+  for (const polygon of [a, b]) {
+    for (const [p, q] of edgesOf(polygon)) {
+      const axis = { x: p.y - q.y, y: q.x - p.x }; // perpendicular to the edge
+      const [aMin, aMax] = project(a, axis);
+      const [bMin, bMax] = project(b, axis);
+      const tolerance = EDGE_TOLERANCE_M * Math.hypot(axis.x, axis.y);
+      if (aMax <= bMin + tolerance || bMax <= aMin + tolerance) return false;
+    }
+  }
+  return true;
+}
+
 /** Whether two boxes share some volume (touching edges or altitudes don't count). */
 function boxesOverlap(a: BoundingBox, b: BoundingBox): boolean {
-  return (
-    Math.min(a.east, b.east) > Math.max(a.west, b.west) &&
-    Math.min(a.north, b.north) > Math.max(a.south, b.south) &&
-    Math.min(a.maxAltitude, b.maxAltitude) > Math.max(a.minAltitude, b.minAltitude)
-  );
+  if (Math.min(a.maxAltitude, b.maxAltitude) <= Math.max(a.minAltitude, b.minAltitude)) {
+    return false;
+  }
+  const origin = boxCenter(a);
+  return polygonsOverlap(cornersIn(origin, a), cornersIn(origin, b));
 }
 
 /**

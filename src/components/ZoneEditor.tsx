@@ -15,21 +15,25 @@ type ShapeKey = keyof ZoneShape;
 // Input values are kept as strings so partial entries like "" or "1." aren't overwritten while typing.
 type Draft = Record<ShapeKey, string>;
 
-// Each row edits a pair of related values side by side.
+// Each row edits one value or a pair of related values side by side.
 const rows: { label: string; fields: [ShapeKey, string][] }[] = [
   {
-    label: "Offset from building, east / north (m)",
+    label: "Offset from drawn center, east / north (m)",
     fields: [
       ["offsetEast", "East offset (m)"],
       ["offsetNorth", "North offset (m)"],
     ],
   },
   {
-    label: "Width / depth (m)",
+    label: "Width across / depth along the rotation (m)",
     fields: [
       ["width", "Width (m)"],
       ["depth", "Depth (m)"],
     ],
+  },
+  {
+    label: "Rotation (° clockwise from north)",
+    fields: [["heading", "Rotation (° clockwise from north)"]],
   },
   {
     label: "Altitude, min / max (m AGL)",
@@ -51,8 +55,9 @@ const swatchClass: Record<ZoneKind, string> = {
 };
 
 /**
- * Edits one user-added flight zone or no-flight zone, in meters relative to the building it was
- * created at. Invalid input shows a message and leaves the last valid zone on the globe.
+ * Edits one drawn flight zone or no-flight zone, in meters relative to the center of the
+ * rectangle the user drew. Invalid input shows a message and leaves the last valid zone on the
+ * globe.
  */
 export default function ZoneEditor({ title, kind, spec, onChange, onRemove }: Props) {
   const [draft, setDraft] = useState<Draft>(
@@ -118,8 +123,9 @@ export default function ZoneEditor({ title, kind, spec, onChange, onRemove }: Pr
 
       {box && (
         <p className="mt-1 font-mono text-xs text-gray-500">
-          W {box.west.toFixed(6)}° E {box.east.toFixed(6)}°
-          <br />S {box.south.toFixed(6)}° N {box.north.toFixed(6)}°
+          Center {box.centerLatitude.toFixed(6)}°, {box.centerLongitude.toFixed(6)}°
+          <br />
+          Rotation {box.heading.toFixed(2)}°
         </p>
       )}
 
