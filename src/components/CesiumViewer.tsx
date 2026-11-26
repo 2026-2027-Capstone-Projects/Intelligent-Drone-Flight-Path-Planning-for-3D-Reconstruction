@@ -26,6 +26,14 @@ import {
   type BoundingBoxBuffer,
   boundingBoxAroundBuilding,
   DEFAULT_BUFFER,
+  DEFAULT_ZONE,
+  type FlightZones,
+  workableGroundArea,
+  type Zone,
+  type ZoneKind,
+  type ZoneSpec,
+  zoneFromSpec,
+  zoneWarnings,
 } from "../boundingBox.ts";
 import BoundingBoxEntity from "./BoundingBoxEntity.tsx";
 import BoundingBoxPanel from "./BoundingBoxPanel.tsx";
@@ -128,6 +136,10 @@ export default function CesiumViewer() {
   // Space around the selected building that forms the drone's operating box. Kept across
   // selections so a tuned buffer carries over to the next building.
   const [buffer, setBuffer] = useState<BoundingBoxBuffer>(DEFAULT_BUFFER);
+  // User-added flight zones and no-flight zones. Each keeps the building it was created at as its
+  // anchor, so zones stay in place when the selection changes.
+  const [zones, setZones] = useState<Zone[]>([]);
+  const nextZoneId = useRef(1);
   // Camera Position
   const [cameraPosition, setCameraPosition] = useState<CameraPosition | null>(null);
   // Camera Orientation
@@ -214,6 +226,46 @@ export default function CesiumViewer() {
   );
   const boundingBox = boundingBoxResult?.box ?? null;
 
+  const addZone = useCallback(
+    (kind: ZoneKind) => {
+      if (!selected) return;
+      const spec: ZoneSpec = {
+        anchorLongitude: selected.longitude,
+        anchorLatitude: selected.latitude,
+        ...DEFAULT_ZONE[kind],
+      };
+      const id = `zone-${nextZoneId.current++}`;
+      setZones((prev) => [...prev, { id, kind, spec }]);
+    },
+    [selected],
+  );
+  const updateZone = useCallback((id: string, spec: ZoneSpec) => {
+    setZones((prev) => prev.map((zone) => (zone.id === id ? { ...zone, spec } : zone)));
+  }, []);
+  const removeZone = useCallback((id: string) => {
+    setZones((prev) => prev.filter((zone) => zone.id !== id));
+  }, []);
+
+  // Only valid specs are stored (the editor rejects the rest), so every `box` here is non-null.
+  const zoneBoxes = useMemo(
+    () => zones.map((zone) => ({ ...zone, box: zoneFromSpec(zone.spec).box })),
+    [zones],
+  );
+  // The building zone counts as the first flight zone.
+  const flightZones = useMemo<FlightZones>(() => {
+    const boxesOf = (kind: ZoneKind) =>
+      zoneBoxes.flatMap((zone) => (zone.kind === kind && zone.box ? [zone.box] : []));
+    return {
+      flight: [...(boundingBox ? [boundingBox] : []), ...boxesOf("flight")],
+      noFlight: boxesOf("noFlight"),
+    };
+  }, [boundingBox, zoneBoxes]);
+  const workableArea = useMemo(() => workableGroundArea(flightZones), [flightZones]);
+  const zoneMessages = useMemo(
+    () => zoneWarnings(flightZones, workableArea),
+    [flightZones, workableArea],
+  );
+
   // Styling by id (rather than setting feature.color) keeps the highlight when tiles reload.
   const selectedId = selected?.elementId;
   const tilesetStyle = useMemo(
@@ -266,7 +318,10 @@ export default function CesiumViewer() {
         )}
 
         <Cesium3DTileset url={osmBuildingsUrl} style={tilesetStyle} />
-        {boundingBox && <BoundingBoxEntity box={boundingBox} />}
+        {boundingBox && <BoundingBoxEntity box={boundingBox} name="Building zone" />}
+        {zoneBoxes.map(
+          (zone) => zone.box && <BoundingBoxEntity key={zone.id} box={zone.box} kind={zone.kind} />,
+        )}
         {/* Oblique view looking north over downtown Corvallis, Oregon */}
         <CameraFlyTo
           destination={Cartesian3.fromDegrees(-123.262, 44.554, 600)}
@@ -311,12 +366,19 @@ export default function CesiumViewer() {
       )}
 
       {selected && <BuildingInfoPanel building={selected} onClose={() => setSelected(null)} />}
-      {selected && (
+      {(selected || zones.length > 0) && (
         <BoundingBoxPanel
+          buildingSelected={selected !== null}
           buffer={buffer}
           onBufferChange={setBuffer}
           box={boundingBox}
           messages={boundingBoxResult?.messages ?? []}
+          zones={zones}
+          onAddZone={addZone}
+          onUpdateZone={updateZone}
+          onRemoveZone={removeZone}
+          workableArea={workableArea}
+          zoneMessages={zoneMessages}
         />
       )}
     </>
