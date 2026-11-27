@@ -140,12 +140,6 @@ export default function CesiumViewer() {
     pitch: -45,
     roll: 0,
   });
-  /*
-  const orientation = {
-    heading: CesiumMath.toRadians(cameraOrientation.heading),
-    pitch: CesiumMath.toRadians(cameraOrientation.pitch),
-    roll: CesiumMath.toRadians(cameraOrientation.roll),
-  };*/
 
   const handleClick = useCallback(
     (movement: CesiumMovementEvent, target: RootEventTarget) => {
